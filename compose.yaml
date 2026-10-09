@@ -2,6 +2,10 @@ name: codex-image-api
 
 services:
   codex-image-api:
+    # Prebuilt multi-arch image from GitHub Actions (.github/workflows/docker.yml);
+    # `docker compose up` pulls it. Set IMAGE to a local name and use
+    # `docker compose up --build` to build from source instead.
+    image: ${IMAGE:-ghcr.io/chendefine/codex-image-api:latest}
     build:
       context: .
       target: runner
@@ -13,7 +17,6 @@ services:
         CODEX_DOWNLOAD_BASE: ${CODEX_DOWNLOAD_BASE:-https://github.com/openai/codex/releases/download}
         APP_UID: ${APP_UID:-1000}
         APP_GID: ${APP_GID:-1000}
-    image: ${IMAGE:-codex-image-api:latest}
     # Run as the owner of CODEX_AUTH_FILE so codex can read it and write
     # refreshed tokens back to it.
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
@@ -39,7 +42,7 @@ services:
       # host or the host login breaks.
       - ${CODEX_AUTH_FILE:?set CODEX_AUTH_FILE in .env}:/home/app/.codex/auth.json
       - ${WORKSPACE_DIR:-./workspace}:/data/workspace
-      - ${CONFIG_FILE:-./config.yaml}:/etc/codex-image-api/config.yaml:ro
+      - ${CONFIG_FILE:-./docker/config.yaml}:/etc/codex-image-api/config.yaml:ro
     # Longer than server.shutdown_timeout + cleanup so in-flight codex runs are cleaned up.
     stop_grace_period: 60s
     healthcheck:

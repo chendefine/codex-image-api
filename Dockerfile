@@ -4,9 +4,11 @@ ARG GO_VERSION=1.27
 ARG RUNTIME_IMAGE=debian:13-slim
 
 # ---- builder: compile codex-image-api ----
-FROM golang:${GO_VERSION}-alpine AS builder
+# Runs on the build platform and cross-compiles, so multi-arch builds need no emulation for Go.
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
 ARG GOPROXY=https://proxy.golang.org,direct
-ENV GOPROXY=${GOPROXY} CGO_ENABLED=0
+ARG TARGETOS TARGETARCH
+ENV GOPROXY=${GOPROXY} CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH}
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -19,7 +21,8 @@ FROM ${RUNTIME_IMAGE} AS runner
 # Codex release tag without the "rust-v" prefix, see https://github.com/openai/codex/releases
 ARG CODEX_VERSION=0.162.0
 ARG CODEX_DOWNLOAD_BASE=https://github.com/openai/codex/releases/download
-# Must match the owner of the host directory mounted as CODEX_HOME.
+# Default user of the image. compose overrides it with `user:` (APP_UID/APP_GID
+# in .env), so a prebuilt image works for any host uid.
 ARG APP_UID=1000
 ARG APP_GID=1000
 
@@ -46,14 +49,16 @@ RUN set -eux; \
     getent group "${APP_GID}" >/dev/null || groupadd -g "${APP_GID}" app; \
     useradd -u "${APP_UID}" -g "${APP_GID}" -m -d /home/app -s /bin/sh app; \
     mkdir -p /home/app/.codex /data/workspace /etc/codex-image-api; \
-    chown -R "${APP_UID}:${APP_GID}" /home/app /data
+    chown -R "${APP_UID}:${APP_GID}" /home/app /data; \
+    chmod 1777 /home/app /data /data/workspace
 
 COPY --from=builder /out/codex-image-api /usr/local/bin/codex-image-api
+COPY docker/config.yaml /etc/codex-image-api/config.yaml
 
 USER ${APP_UID}:${APP_GID}
 ENV HOME=/home/app CODEX_HOME=/home/app/.codex
 WORKDIR /data
 EXPOSE 8080
 ENTRYPOINT ["tini", "--", "codex-image-api"]
-# The config is bind-mounted here by compose (CONFIG_FILE in .env).
+# Default config baked in from docker/config.yaml; compose bind-mounts CONFIG_FILE over it.
 CMD ["-config", "/etc/codex-image-api/config.yaml"]
