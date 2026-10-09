@@ -1,0 +1,5 @@
+bin/
+workspace/
+codex-home/
+/config.yaml
+.env
