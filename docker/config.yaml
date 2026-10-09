@@ -1,0 +1,33 @@
+# Default config for the Docker image (see config.example.yaml for all options).
+# Baked into the image; override by mounting your own file via CONFIG_FILE in .env.
+server:
+  listen: ":8080"
+  api_keys: []
+  shutdown_timeout: 30s
+
+workspace:
+  # Bind-mounted from WORKSPACE_DIR in .env.
+  dir: /data/workspace
+  # false/0 = remove per request, N = keep N days (pruned at midnight, TZ), true = forever.
+  keep: true
+
+codex:
+  bin: codex
+  model: ""
+  profile: ""
+  # The container is the isolation boundary; codex's bubblewrap sandbox cannot
+  # create namespaces under Docker's default seccomp/AppArmor profiles.
+  sandbox: danger-full-access
+  codex_home: ""       # $CODEX_HOME (/home/app/.codex: named volume + host auth.json)
+  timeout: 15m
+  max_concurrency: 4
+  max_queue: 32
+  queue_timeout: 5m
+  extra_args: []
+  env: {}
+
+limits:
+  max_image_bytes: 52428800
+  max_images: 5
+  max_n: 10
+  allow_image_urls: false
