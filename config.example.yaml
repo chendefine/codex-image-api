@@ -1,0 +1,37 @@
+server:
+  listen: ":8080"
+  # Empty = no auth. Otherwise clients must send "Authorization: Bearer <key>".
+  api_keys: []
+  # On SIGTERM, in-flight requests get this long to finish; then they are
+  # canceled and their codex processes killed.
+  shutdown_timeout: 30s
+
+workspace:
+  # Every API call gets its own working directory: <dir>/<YYYYMMDD>/<request-id>/ (same ID as the X-Request-Id header)
+  dir: /opt/codex-image-api/workspace
+  # Keep per-request directories (prompt, inputs, outputs, codex logs) for debugging.
+  # Requests rejected before codex starts (validation, busy) never keep theirs.
+  keep: true
+
+codex:
+  bin: codex
+  model: ""            # codex exec -m; empty = model from ~/.codex/config.toml
+  profile: ""          # codex exec -p
+  sandbox: workspace-write
+  codex_home: ""       # where the built-in tool saves images; default $CODEX_HOME or ~/.codex
+  timeout: 15m
+  max_concurrency: 4
+  # Requests beyond max_concurrency wait for a free slot: at most max_queue of
+  # them, for at most queue_timeout; otherwise 503 with Retry-After.
+  max_queue: 32
+  queue_timeout: 5m
+  # Appended verbatim to `codex exec`, e.g. ["-c", "model_reasoning_effort=\"low\""]
+  extra_args: []
+  env: {}
+
+limits:
+  max_image_bytes: 52428800   # per input image
+  max_images: 16              # input images per edit request
+  max_n: 10
+  # Allow JSON edit requests to reference http(s) image URLs (downloaded by the server).
+  allow_image_urls: false
