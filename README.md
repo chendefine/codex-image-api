@@ -18,6 +18,24 @@ cp config.example.yaml config.yaml   # 按需修改
 
 前置条件：`codex` 已登录且 `image_generation` feature 启用（`codex features list | grep image_generation`）。
 
+## Docker
+
+`Dockerfile` 分两阶段：`builder` 编译服务，`runner` 安装 codex 官方 standalone 包（`codex-package-<target>.tar.gz`，含 `codex-code-mode-host` 等内置工具依赖，只装裸 `codex` 二进制会导致 image_gen 无法启动）并运行服务。`compose.yaml` 只把宿主机的 `auth.json`（`CODEX_AUTH_FILE`）挂载到容器内 `CODEX_HOME`（`/home/app/.codex`），其余内容（sessions、generated_images、系统 skill 等，codex 首次运行时自动生成）放在宿主机目录 `CODEX_HOME_DIR`（默认 `./codex-home`）中，工作目录挂载到 `/data/workspace`，服务配置由 `CONFIG_FILE`（默认 `./config.yaml`）挂载到容器内 `/etc/codex-image-api/config.yaml`，其中 `workspace.dir` 应为 `/data/workspace`、`codex.sandbox` 应为 `danger-full-access`。
+
+```bash
+cp .env.example .env    # 至少设置 APP_UID/APP_GID 和 CODEX_AUTH_FILE
+cp config.example.yaml config.yaml   # 改 workspace.dir=/data/workspace、codex.sandbox=danger-full-access
+mkdir -p codex-home workspace       # 须事先以 APP_UID 创建，否则 Docker 会自动创建为 root 属主，codex 无法写入
+docker compose up -d --build
+curl -s localhost:8080/healthz
+```
+
+- **UID/GID**：容器以 `APP_UID:APP_GID` 运行（构建时创建同 uid 用户，运行时 `user:` 同值），必须与 `CODEX_AUTH_FILE` 的属主一致（`stat -c '%u %g' ~/.codex/auth.json`，文件权限为 0600）。`CODEX_HOME_DIR` 和 `WORKSPACE_DIR` 也须属于该用户；修改 uid 后要 `chown -R` 这两个目录。
+- **auth.json**：必须可读写挂载。codex 刷新 token 时原地改写该文件（不换 inode，单文件挂载两边可见）；刷新令牌会轮换，若写不回宿主机，宿主机上的 codex 会因旧令牌失效而掉线。容器内不读宿主机的 `config.toml`，模型等用服务配置的 `codex.model`/`codex.extra_args` 指定。
+- **沙箱**：Docker 默认 seccomp/AppArmor 下 codex 的 bubblewrap 沙箱无法创建命名空间，容器内应使用 `codex.sandbox: danger-full-access`，以容器作为隔离边界。
+- **网络**：容器需要能访问 `chatgpt.com`。宿主机经代理上网时设置 `HTTPS_PROXY`（宿主机上的代理用 `host.docker.internal`）；宿主机路径 MTU 小于 1500 时设置 `NETWORK_MTU`，否则 TLS 握手会卡住，codex 报 `workspace routing discovery failed`。
+- 其余构建/运行参数（Go 版本、`GOPROXY`、`CODEX_VERSION`、下载镜像、端口等）见 [.env.example](.env.example)。
+
 ## 示例
 
 ```bash

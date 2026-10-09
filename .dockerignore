@@ -1,5 +1,8 @@
+.git
 bin/
 workspace/
 codex-home/
 /config.yaml
 .env
+compose.yaml
+Dockerfile

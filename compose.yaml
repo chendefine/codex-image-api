@@ -1,0 +1,59 @@
+name: codex-image-api
+
+services:
+  codex-image-api:
+    build:
+      context: .
+      target: runner
+      args:
+        GO_VERSION: ${GO_VERSION:-1.27}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:13-slim}
+        CODEX_VERSION: ${CODEX_VERSION:-0.162.0}
+        CODEX_DOWNLOAD_BASE: ${CODEX_DOWNLOAD_BASE:-https://github.com/openai/codex/releases/download}
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    image: ${IMAGE:-codex-image-api:latest}
+    # Run as the owner of CODEX_AUTH_FILE so codex can read it and write
+    # refreshed tokens back to it.
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    restart: unless-stopped
+    hostname: codex-image-api
+    container_name: codex-image-api
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8080}:8080"
+    environment:
+      CODEX_HOME: /home/app/.codex
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    extra_hosts:
+      # Lets HTTP(S)_PROXY point at a proxy on the Docker host.
+      - host.docker.internal:host-gateway
+    volumes:
+      # CODEX_HOME is a host directory owned by APP_UID; create it beforehand
+      # (mkdir codex-home), otherwise Docker creates it owned by root.
+      - ${CODEX_HOME_DIR:-./codex-home}:/home/app/.codex
+      # Only the host's auth.json is shared. Mounted read-write: codex rewrites it
+      # in place on token refresh, and the rotated refresh token must reach the
+      # host or the host login breaks.
+      - ${CODEX_AUTH_FILE:?set CODEX_AUTH_FILE in .env}:/home/app/.codex/auth.json
+      - ${WORKSPACE_DIR:-./workspace}:/data/workspace
+      - ${CONFIG_FILE:-./config.yaml}:/etc/codex-image-api/config.yaml:ro
+    # Longer than server.shutdown_timeout + cleanup so in-flight codex runs are cleaned up.
+    stop_grace_period: 60s
+    healthcheck:
+      test: [ "CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz" ]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    networks:
+      - default
+
+networks:
+  default:
+    driver_opts:
+      # Lower this when the host's path MTU is below 1500 (VPN/PPPoE/tunnel),
+      # otherwise TLS handshakes to chatgpt.com may stall inside the container.
+      com.docker.network.driver.mtu: ${NETWORK_MTU:-1500}
