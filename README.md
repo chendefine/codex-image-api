@@ -22,7 +22,7 @@ cp config.example.yaml config.yaml   # 按需修改
 
 `Dockerfile` 分两阶段：`builder` 编译服务（在构建平台上交叉编译），`runner` 安装 codex 官方 standalone 包（`codex-package-<target>.tar.gz`，含 `codex-code-mode-host` 等内置工具依赖，只装裸 `codex` 二进制会导致 image_gen 无法启动）并运行服务，同时内置默认配置 [docker/config.yaml](docker/config.yaml)（`workspace.dir: /data/workspace`、`codex.sandbox: danger-full-access`）。`compose.yaml` 只把宿主机的 `auth.json`（`CODEX_AUTH_FILE`）挂载到容器内 `CODEX_HOME`（`/home/app/.codex`），其余内容（sessions、generated_images、系统 skill 等，codex 首次运行时自动生成）放在宿主机目录 `CODEX_HOME_DIR`（默认 `./codex-home`）中，工作目录挂载到 `/data/workspace`，服务配置由 `CONFIG_FILE`（默认 `./docker/config.yaml`）挂载到容器内 `/etc/codex-image-api/config.yaml`；自定义配置时 `workspace.dir` 应为 `/data/workspace`、`codex.sandbox` 应为 `danger-full-access`。
 
-**预构建镜像**：GitHub Actions（[.github/workflows/docker.yml](.github/workflows/docker.yml)）在每次 push 时先跑测试，再构建 `linux/amd64`、`linux/arm64` 镜像推送到 `ghcr.io/chendefine/codex-image-api`。标签：`latest`（main 分支）、`X.Y.Z`/`X.Y`（`vX.Y.Z` tag）、分支名、`sha-<短 hash>`。`compose.yaml` 默认使用 `:latest`，无需本地构建：
+**预构建镜像**：GitHub Actions（[.github/workflows/docker.yml](.github/workflows/docker.yml)）在每次 push 时先跑测试，再构建 `linux/amd64`、`linux/arm64` 镜像推送到 `ghcr.io/chendefine/codex-image-api`，随后原样复制到 Docker Hub `chendefine/codex-image-api`（需在仓库配置 secrets `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`，未配置时跳过）。标签：`latest`（main 分支）、`X.Y.Z`/`X.Y`（`vX.Y.Z` tag）、分支名、`sha-<短 hash>`。`compose.yaml` 默认使用 `:latest`，无需本地构建：
 
 ```bash
 cp .env.example .env    # 至少设置 APP_UID/APP_GID 和 CODEX_AUTH_FILE
