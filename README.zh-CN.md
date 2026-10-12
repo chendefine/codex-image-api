@@ -269,14 +269,12 @@ Codex 内置 `image_gen` 工具只有 `prompt`、`transparent_background`、`ref
 
 ### 预构建镜像
 
-[.github/workflows/docker.yml](.github/workflows/docker.yml) 在每次 push 和 PR 时运行 `go vet` 和 `go test`，只改动 `*.md` 的 push 会被跳过。对于 push，接着构建 `linux/amd64`、`linux/arm64` 镜像推送到 `ghcr.io/chendefine/codex-image-api`，再原样复制到 Docker Hub 的 `chendefine/codex-image-api`。推送 Docker Hub 需要在仓库中配置 secrets `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`，未配置时跳过这一步。
+[.github/workflows/docker.yml](.github/workflows/docker.yml) 在每次 push 和 PR 时运行 `go vet` 和 `go test`，只改动 `*.md` 的分支 push 会被跳过。只有推送 `vX.Y.Z` 格式的 git tag（如 `v1.2.3`）时才构建镜像：构建 `linux/amd64`、`linux/arm64` 镜像推送到 `ghcr.io/chendefine/codex-image-api`，再原样复制到 Docker Hub 的 `chendefine/codex-image-api`。分支 push、PR、手动触发和其他 tag 只运行测试。推送 Docker Hub 需要在仓库中配置 secrets `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`，未配置时跳过这一步。
 
 | 标签 | 来源 |
 |---|---|
-| `latest` | 默认分支（`main`） |
-| `X.Y.Z`、`X.Y` | `vX.Y.Z` git tag |
-| `<branch>` | 任意分支 |
-| `sha-<短 hash>` | 每次构建 |
+| `X.Y.Z` | `vX.Y.Z` git tag（去掉 `v`） |
+| `latest` | 最近一次推送的 `vX.Y.Z` git tag |
 
 ## 开发
 

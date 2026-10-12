@@ -269,14 +269,12 @@ The [Dockerfile](Dockerfile) has two stages. `builder` compiles the server; it r
 
 ### Prebuilt images
 
-[.github/workflows/docker.yml](.github/workflows/docker.yml) runs `go vet` and `go test` on every push and pull request. Pushes that change only `*.md` files are skipped. For pushes, it then builds `linux/amd64` and `linux/arm64` images, pushes them to `ghcr.io/chendefine/codex-image-api`, and copies them unchanged to Docker Hub as `chendefine/codex-image-api`. The Docker Hub step needs the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, and is skipped without them.
+[.github/workflows/docker.yml](.github/workflows/docker.yml) runs `go vet` and `go test` on every push and pull request. Branch pushes that change only `*.md` files are skipped. Images are built only when a `vX.Y.Z` git tag (e.g. `v1.2.3`) is pushed: the workflow then builds `linux/amd64` and `linux/arm64` images, pushes them to `ghcr.io/chendefine/codex-image-api`, and copies them unchanged to Docker Hub as `chendefine/codex-image-api`. Branch pushes, pull requests, manual runs and other tags only run the tests. The Docker Hub step needs the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, and is skipped without them.
 
 | Tag | Source |
 |---|---|
-| `latest` | default branch (`main`) |
-| `X.Y.Z`, `X.Y` | `vX.Y.Z` git tags |
-| `<branch>` | any branch |
-| `sha-<short>` | every build |
+| `X.Y.Z` | `vX.Y.Z` git tag (without the `v`) |
+| `latest` | most recent `vX.Y.Z` git tag |
 
 ## Development
 

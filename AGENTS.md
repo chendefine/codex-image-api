@@ -34,7 +34,7 @@ internal/codex/        codex exec 调用、prompt 构造、长宽比换算、图
 internal/config/       YAML 配置加载、默认值、校验
 internal/logctx/       在 context 中携带请求级 *slog.Logger
 docker/                镜像内置配置 config.yaml、入口脚本 entrypoint.sh
-.github/workflows/     测试 → 构建多架构镜像推送 GHCR → 复制到 Docker Hub
+.github/workflows/     测试；仅 vX.Y.Z tag 时构建多架构镜像推送 GHCR（X.Y.Z + latest）→ 复制到 Docker Hub
 ```
 
 ## 架构
