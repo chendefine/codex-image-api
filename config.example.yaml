@@ -30,6 +30,7 @@ codex:
   max_queue: 32
   queue_timeout: 5m
   # Appended verbatim to `codex exec`, e.g. ["-c", "model_reasoning_effort=\"low\""]
+  # (after the built-in -c overrides that disable AGENTS.md loading and telemetry; later -c wins)
   extra_args: []
   env: {}
 

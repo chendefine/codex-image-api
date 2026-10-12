@@ -40,7 +40,7 @@
 ```
 
 1. 服务为请求创建工作目录，并把输入图片（如有）写入其中。
-2. 启动 `codex exec`，prompt 经 stdin 传入。prompt 以 `$imagegen` 开头，不包含任何文件路径；输入图片通过 `-i` 附加，在 prompt 中以 `[Image #1]…[Image #K]` 指代。
+2. 启动 `codex exec`，prompt 经 stdin 传入。prompt 分两部分：前面是给 Codex 的指令，包括 `$imagegen`、一行禁止提问和写文件的说明，以及传了 `n` 时的图片数量；后面是 `Image request` 段，放要送进 `image_gen` prompt 的内容，标题中带长宽比和透明背景（仅在设置时出现），下面是原样的用户 prompt。prompt 不包含任何文件路径。输入图片通过 `-i` 附加，Codex 会带上它们的路径，skill 和 `image_gen` 无需额外说明即可完成编辑。另外还会传入几个 `-c` 覆盖项：禁止 Codex 加载任何 `AGENTS.md`（否则 `workspace.dir` 位于 git 仓库内时，仓库里的 `AGENTS.md` 会进入每次会话的上下文），并关闭遥测：`analytics.enabled=false`，`otel.exporter`、`otel.trace_exporter`、`otel.metrics_exporter` 均设为 `"none"`。`codex.extra_args` 排在它们之后，可以覆盖这些设置。
 3. Codex 退出后，服务从会话记录（rollout）中找出已完成的 `image_gen` 调用，到 `$CODEX_HOME` 中取出对应图片，复制到工作目录，再以 `b64_json` 返回。
 4. 最后删除本次会话在 `$CODEX_HOME` 中留下的文件。
 
@@ -133,7 +133,7 @@ with open("fox.png", "wb") as f:
 | `codex.max_concurrency` | `2` | 同时运行的 Codex 进程数上限。 |
 | `codex.max_queue` | `16` | 等待槽位的请求数上限。 |
 | `codex.queue_timeout` | `5m` | 请求等待槽位的最长时间。 |
-| `codex.extra_args` | `[]` | 追加给 `codex exec` 的参数，如 `["-c", "model_reasoning_effort=\"low\""]`。 |
+| `codex.extra_args` | `[]` | 追加给 `codex exec` 的参数，如 `["-c", "model_reasoning_effort=\"low\""]`。它们排在内置的 `-c` 覆盖项（不加载 `AGENTS.md`、关闭遥测）之后，同一个键以后写的为准。 |
 | `codex.env` | `{}` | 传给 Codex 的额外环境变量。 |
 | `limits.max_image_bytes` | `52428800`（50 MiB） | 单张输入图片的大小上限。 |
 | `limits.max_images` | `5` | 每个编辑请求的输入图片数上限。超过 5 按 5 处理（内置 `image_gen` 工具的上限）。 |
@@ -158,10 +158,10 @@ Codex 内置 `image_gen` 工具只有 `prompt`、`transparent_background`、`ref
 
 | OpenAI 参数 | 处理方式 |
 |---|---|
-| `prompt` | 必填，最多 32000 字符，原样作为 `image_gen` 的 prompt。 |
-| `n` | 取值 1 ~ `limits.max_n`。在 prompt 中要求 Codex 交付 `n` 张最终图片；结果不符合要求时，Codex 可以多次调用 `image_gen` 替换草稿。不传 `n` 时，prompt 不限定图片数量，返回 Codex 生成的全部图片。 |
-| `background` | `transparent` 时设置 `transparent_background=true`；`opaque`、`auto` 或不传时不设置。 |
-| `image` / `image[]` / `images[].image_url` | 保存到 `input/`，通过 `codex exec -i` 附加；prompt 中只以 `[Image #1]…[Image #K]` 指代。支持 PNG、JPEG、WebP、GIF。 |
+| `prompt` | 必填，最多 32000 字符，原样放在 `Image request:` 标题下；skill 可能先整理结构再调用 `image_gen`。 |
+| `n` | 取值 1 ~ `limits.max_n`。在指令部分写 `Deliver 1 image file, fulfilling the whole request on its own.` 或 `Deliver n separate image files, each fulfilling the whole request on its own.`，放在 Image request 段之外，每张都是完整满足请求的独立结果，避免数量被画进同一张图，也不和用户要求的九宫格等拼图冲突。`n` = 1 时，"4 logo variations" 这类 prompt 会得到一张包含四个方案的图，而不是生成四张、只返回最后一张。结果不符合要求时，Codex 可以多次调用 `image_gen` 替换草稿，最终保留最后 `n` 张。不传 `n` 时返回 Codex 生成的全部图片。 |
+| `background` | `transparent` 时在 `Image request` 标题中加 `transparent background`，由 `image_gen` 设置 `transparent_background=true`；`opaque`、`auto` 或不传时不加内容。 |
+| `image` / `image[]` / `images[].image_url` | 保存到 `input/`，通过 `codex exec -i` 附加；prompt 中不提及。支持 PNG、JPEG、WebP、GIF。 |
 | `size` | 不传或 `auto`：不限制尺寸。`WxH`：换算成长宽比写进 prompt（见下文）。格式错误返回 400。 |
 | `quality`、`model`、`moderation`、`output_format`、`output_compression`、`input_fidelity`、`mask`、`style`、`response_format`、`stream`、`partial_images`、`user` | 内置工具不支持，接收后忽略。 |
 | `images[].file_id` | 不支持，返回 400。 |

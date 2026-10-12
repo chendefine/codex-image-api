@@ -40,7 +40,7 @@ client ──HTTP──▶ codex-image-api ──stdin prompt──▶ codex exe
 ```
 
 1. The server creates a working directory for the request and writes any input images to it.
-2. It starts `codex exec` and passes the prompt on stdin. The prompt starts with `$imagegen` and contains no file paths. Input images are attached with `-i` and referred to as `[Image #1]…[Image #K]`.
+2. It starts `codex exec` and passes the prompt on stdin. The prompt has two parts. First come instructions for Codex: `$imagegen`, one line forbidding questions and file writes, and the image count when `n` is given. Then an `Image request` section holds what goes into the `image_gen` prompt: the aspect ratio and transparent background (only when set) in the header, and your prompt verbatim. It contains no file paths. Input images are attached with `-i`; Codex shows them with their paths, so the skill and `image_gen` handle the edit without further instructions. Codex also gets `-c` overrides that stop it from loading any `AGENTS.md` (otherwise one from an enclosing git repository of `workspace.dir` would join every session's context) and that turn off telemetry: `analytics.enabled=false` and `otel.exporter`, `otel.trace_exporter` and `otel.metrics_exporter` set to `"none"`. `codex.extra_args` comes after them and can override them.
 3. When Codex exits, the server reads the session rollout to find the completed `image_gen` calls. It takes their images from `$CODEX_HOME`, copies them to the working directory and returns them as `b64_json`.
 4. Finally, it deletes the files this session left in `$CODEX_HOME`.
 
@@ -133,7 +133,7 @@ The server reads a YAML file given by `-config` (default `config.yaml`). See the
 | `codex.max_concurrency` | `2` | Maximum number of Codex processes running at once. |
 | `codex.max_queue` | `16` | Maximum number of requests waiting for a slot. |
 | `codex.queue_timeout` | `5m` | Maximum time a request waits for a slot. |
-| `codex.extra_args` | `[]` | Extra arguments for `codex exec`, e.g. `["-c", "model_reasoning_effort=\"low\""]`. |
+| `codex.extra_args` | `[]` | Extra arguments for `codex exec`, e.g. `["-c", "model_reasoning_effort=\"low\""]`. They follow the built-in `-c` overrides (no `AGENTS.md`, no telemetry), so a later `-c` for the same key wins. |
 | `codex.env` | `{}` | Extra environment variables for Codex. |
 | `limits.max_image_bytes` | `52428800` (50 MiB) | Maximum size of each input image. |
 | `limits.max_images` | `5` | Maximum number of input images per edit request. Values above 5 are capped at 5 (the limit of the built-in `image_gen` tool). |
@@ -158,10 +158,10 @@ The Codex built-in `image_gen` tool has only four parameters: `prompt`, `transpa
 
 | OpenAI parameter | Handling |
 |---|---|
-| `prompt` | Required, at most 32,000 characters. Used verbatim as the `image_gen` prompt. |
-| `n` | 1 to `limits.max_n`. The prompt asks Codex for `n` final images. Codex may call `image_gen` more often to replace drafts that miss the request. If `n` is omitted, the prompt sets no image count and every image Codex generates is returned. |
-| `background` | `transparent` sets `transparent_background=true`. `opaque`, `auto` or omitted leaves it out. |
-| `image` / `image[]` / `images[].image_url` | Saved to `input/` and attached with `codex exec -i`. The prompt refers to them only as `[Image #1]…[Image #K]`. Formats: PNG, JPEG, WebP, GIF. |
+| `prompt` | Required, at most 32,000 characters. Passed verbatim under the `Image request:` header; the skill may structure it before calling `image_gen`. |
+| `n` | 1 to `limits.max_n`. The instructions part says `Deliver 1 image file, fulfilling the whole request on its own.` or `Deliver n separate image files, each fulfilling the whole request on its own.`, outside the image request, so the count is not drawn into one image and does not conflict with a user who asks for a grid. With `n` = 1, a prompt such as "4 logo variations" yields one image showing all four instead of four images of which only the last is returned. Codex may call `image_gen` more often to replace drafts that miss the request, and the last `n` images are kept. If `n` is omitted, every image Codex generates is returned. |
+| `background` | `transparent` adds `transparent background` to the `Image request` header, and `image_gen` sets `transparent_background=true`. `opaque`, `auto` or omitted adds nothing. |
+| `image` / `image[]` / `images[].image_url` | Saved to `input/` and attached with `codex exec -i`. The prompt does not mention them. Formats: PNG, JPEG, WebP, GIF. |
 | `size` | Omitted or `auto`: no size constraint. `WxH`: converted to an aspect ratio and requested in the prompt (see below). An invalid format returns 400. |
 | `quality`, `model`, `moderation`, `output_format`, `output_compression`, `input_fidelity`, `mask`, `style`, `response_format`, `stream`, `partial_images`, `user` | Accepted and ignored. The built-in tool doesn't support them. |
 | `images[].file_id` | Not supported. Returns 400. |

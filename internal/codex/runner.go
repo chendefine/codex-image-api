@@ -165,6 +165,19 @@ func (r *Runner) acquire(ctx context.Context) (release func(), err error) {
 	}
 }
 
+// configOverrides are passed to every `codex exec` before cfg.ExtraArgs, which
+// can still override them.
+var configOverrides = []string{
+	// Codex loads every AGENTS.md from the project root (e.g. an enclosing git
+	// repository of workspace.dir) down to the workdir into the context.
+	"-c", "project_doc_max_bytes=0",
+	// No telemetry: OpenAI analytics and the OTel exporters (metrics default to Statsig).
+	"-c", "analytics.enabled=false",
+	"-c", `otel.metrics_exporter="none"`,
+	"-c", `otel.exporter="none"`,
+	"-c", `otel.trace_exporter="none"`,
+}
+
 // BuildArgs returns the `codex exec` arguments. No prompt argument is given, so
 // codex reads it from stdin; `-i <FILE>...` is variadic and would swallow any
 // positional argument (even "-") as another image, so the -i flags come last.
@@ -174,6 +187,7 @@ func (r *Runner) BuildArgs(wd *Workdir, job Job) []string {
 		"-s", r.cfg.Sandbox,
 		"-o", filepath.Join(wd.Dir, "last_message.txt"),
 	}
+	args = append(args, configOverrides...)
 	if r.cfg.Model != "" {
 		args = append(args, "-m", r.cfg.Model)
 	}

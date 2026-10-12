@@ -62,12 +62,12 @@ docker/                镜像内置配置 config.yaml、入口脚本 entrypoint.
 
 ### internal/codex
 
-- **`prompt.go`**：`BuildPrompt(Job)` 生成经 stdin 传给 codex 的 prompt，必须以 `$imagegen` 开头。prompt 中**不出现任何文件路径**，输入图片只用 `[Image #k]` 指代（通过 `-i` 附加）。`n` 体现为"交付 n 张最终图片"：允许 codex 检查结果并再次调用 image_gen 替换不合格的草稿，最后一条消息用 `FINAL_IMAGE: <文件名>` 逐行列出交付的图片；不传 `n` 时 `Job.N = 0`，prompt 不写数量和替换草稿的说明，`selectFinal` 也不限数量；prompt 还要求 codex 不复制、移动或保存任何图片。透明背景体现为 `transparent_background=true`。
+- **`prompt.go`**：`BuildPrompt(Job)` 生成经 stdin 传给 codex 的 prompt，力求最简，分两部分：给 codex 的指令（`$imagegen`、一行"非交互、不提问、不保存或复制文件"、传了 `n` 时的数量行：`n` = 1 为 `Deliver 1 image file, fulfilling the whole request on its own.`，`n` > 1 为 `Deliver n separate image files, each fulfilling the whole request on its own.`；`n` = 1 也必须写，否则"4 个变体"这类 prompt 会被生成成 4 张，只返回最后一张），然后是 `Image request (aspect ratio W:H, orientation; transparent background):` 段加原样的用户 prompt，括号里的属性仅在需要时出现。要送进 image_gen prompt 的内容只能放在 Image request 段，数量等纯指令不能放进去，否则可能被画成多格拼图。skill 或 image_gen 工具描述已经覆盖的内容（使用内置工具、区分生成/编辑、用 `referenced_image_paths` 编辑附件、迭代替换草稿、设置 `transparent_background`）**不要再写进 prompt**。prompt 中**不出现任何文件路径**，也不提及输入图片：codex 会用 `<image name=[Image #k] path=...>` 带上 `-i` 附件的路径。prompt 不要求 `FINAL_IMAGE` 行，`selectFinal` 因此取最后 `n` 张；不传 `n` 时 `Job.N = 0`，不限数量。
 - **`aspect.go`**：`AspectRatio(w, h)` 把 `size` 换算成长宽比：误差 ≤5% 时吸附到常见比例，否则取约简比值（各项 ≤25），并限制在 1:3 ~ 3:1。结果只写进 prompt，因为内置工具无法指定像素。
 - **`runner.go`**：
   - 并发：信号量限制并发数为 `codex.max_concurrency`；最多 `codex.max_queue` 个请求等待槽位，最长等待 `codex.queue_timeout`，否则返回 `ErrBusy`。`codex.timeout` 从拿到槽位后开始计时。ctx 被取消时返回 `context.Cause(ctx)`。
   - 工作目录：`NewWorkdir(id)` 创建 `<workspace.dir>/<YYYYMMDD>/<id>/output/`，用 `Mkdir` 保证目录不被复用；`input/` 只在编辑请求中创建。
-  - 进程：`BuildArgs` 中的 `-i` 必须放在最后（它是可变参数，会吞掉后续的位置参数）。codex 在独立进程组中运行，超时或取消时整组 SIGKILL。
+  - 进程：`BuildArgs` 中的 `-i` 必须放在最后（它是可变参数，会吞掉后续的位置参数）。`configOverrides` 固定传 `-c project_doc_max_bytes=0`（不加载 AGENTS.md：codex 会从 git 根目录一路读到工作目录，`workspace.dir` 在仓库内时会把仓库的 AGENTS.md 注入每次会话）和关闭遥测的 `analytics.enabled=false`、`otel.{exporter,trace_exporter,metrics_exporter}="none"`（`metrics_exporter` 默认发往 Statsig），放在 `extra_args` 之前，codex 中同一个键以后写的 `-c` 为准，因此 `extra_args` 可以覆盖它们。codex 在独立进程组中运行，超时或取消时整组 SIGKILL。
   - 收集：codex 结束后，从 `codex.jsonl` 的 `thread.started` 事件取 `thread_id`，读取 `$CODEX_HOME/sessions/*/*/*/rollout-*-<tid>.jsonl` 中已完成的 `image_gen.generation` 条目，按顺序到 `generated_images/<tid>/<item_id>.*` 取图；文件缺失时解码 rollout 中的 base64，没有 rollout 时按 mtime 兜底。再用 `selectFinal` 选图：按 `last_message.txt` 中 `FINAL_IMAGE:` 列出的 id（文件名去扩展名）依次选取，最多 `n` 张；一张都对不上时取最后 `n` 张。图片写入 `output/`。最后（包括失败时）用 `cleanupThread` 删除该 thread 的 `generated_images` 目录和 rollout 文件。从 codex 输出读到的 id 在拼路径前都要经过 `validID` 校验。
   - 清理：`Cleanup` 只在 `workspace.keep` 不为 0 **且 codex 实际运行过**时保留工作目录（`wd.ran`）；在 codex 启动前就被拒绝的请求一律删除工作目录。
 - **`prune.go`**：`workspace.keep = N` 时，`RunPruner` 在启动时和每天本地 0 点删除早于"今天 − N 天"的 `<YYYYMMDD>` 目录，由 `main.go` 的 `run` 启动。

@@ -25,71 +25,52 @@ type Job struct {
 func (j Job) IsEdit() bool { return len(j.InputImages) > 0 }
 
 // finalImageMarker prefixes each line of the agent's final message that names
-// a delivered image; see finalImageIDs.
+// a delivered image; see finalImageIDs. The prompt does not ask for it: without
+// such lines the runner keeps the last n images.
 const finalImageMarker = "FINAL_IMAGE:"
 
-// BuildPrompt renders the instructions passed to `codex exec` on stdin.
-// The prompt starts with the $imagegen skill mention so codex loads that skill.
-// It names no output location: the runner collects the images the built-in tool
-// saves under $CODEX_HOME/generated_images/<thread_id>/, picking the ones the
-// final message lists after finalImageMarker.
+// BuildPrompt renders the instructions passed to `codex exec` on stdin in two
+// parts: job instructions for codex (the $imagegen skill mention, no questions,
+// no files, the image count when n is given), then an "Image request" section holding what the
+// image_gen prompt should carry: the image attributes the user's text cannot
+// (aspect ratio, transparency) and the user's prompt verbatim. Keeping the count
+// out of that section stops it from leaking into a single image as a grid.
+//
+// Everything else is left to the skill and the image_gen tool description: the
+// skill defaults to the built-in tool, decides generate vs edit and iterates on
+// misses; the tool sets transparent_background when the request asks for it and
+// edits attached images through referenced_image_paths, since codex labels each
+// -i attachment with its path. The runner collects whatever image_gen saved
+// under $CODEX_HOME/generated_images/<thread_id>/, so no output location is named.
 func BuildPrompt(job Job) string {
 	var b strings.Builder
 	b.WriteString("$imagegen\n")
-	b.WriteString("Use the imagegen skill in its default built-in `image_gen` tool mode. ")
-	b.WriteString("This is a non-interactive job: never ask questions, proceed with sensible choices.\n\n")
-
-	if job.IsEdit() {
-		b.WriteString("Task: edit the input image(s) according to the request below.\n")
-	} else {
-		b.WriteString("Task: generate a brand-new image from the request below.\n")
-	}
-	if job.N > 0 {
-		images := "image"
-		if job.N > 1 {
-			images = "images"
-		}
-		fmt.Fprintf(&b, "Deliver exactly %d final %s for this request, each one the result of a built-in image_gen call", job.N, images)
-		if job.Transparent {
-			b.WriteString("; set transparent_background=true on every call")
-		}
-		b.WriteString(".\n")
-		b.WriteString("You may call image_gen more than once per image to replace results that miss the request; ")
-		b.WriteString("only the final images you list at the end are delivered.\n")
-	} else if job.Transparent {
-		b.WriteString("Set transparent_background=true on every image_gen call.\n")
+	// codex exec cannot answer a question, and the skill would copy project-bound
+	// images into the workspace.
+	b.WriteString("Non-interactive preview job: don't ask questions, don't save or copy any files.\n")
+	// Without a count codex delivers one file per variant a prompt such as
+	// "4 logo variations" asks for, and the runner keeps only the last n.
+	switch {
+	case job.N == 1:
+		b.WriteString("Deliver 1 image file, fulfilling the whole request on its own.\n")
+	case job.N > 1:
+		fmt.Fprintf(&b, "Deliver %d separate image files, each fulfilling the whole request on its own.\n", job.N)
 	}
 
-	if job.IsEdit() {
-		// A single image still needs this paragraph: the prompt names no path, so it is the
-		// only link to the attachment, and it keeps every call (retries, n > 1) editing the
-		// original instead of the previous draft. Only the ordering is dropped.
-		if k := len(job.InputImages); k == 1 {
-			b.WriteString("The input image is attached to this message as [Image #1]; ")
-			b.WriteString("use it as the edit target of every image_gen call ")
-			b.WriteString("(pass the attached image's file path as referenced_image_paths).\n")
-		} else {
-			fmt.Fprintf(&b, "The %d input images are attached to this message as [Image #1] ... [Image #%d]; ", k, k)
-			b.WriteString("use them, in that order, as the edit targets of every image_gen call ")
-			b.WriteString("(pass the attached images' file paths as referenced_image_paths).\n")
-		}
-	}
-
+	var attrs []string
 	if job.AspectRatio != "" {
-		fmt.Fprintf(&b, "Every output image must have a %s (width:height) aspect ratio, %s; ", job.AspectRatio, orientation(job.AspectRatio))
-		b.WriteString("state this aspect ratio explicitly in every image_gen prompt.\n")
+		attrs = append(attrs, fmt.Sprintf("aspect ratio %s, %s", job.AspectRatio, orientation(job.AspectRatio)))
 	}
-
-	b.WriteString("Use the full request text as the image_gen prompt: do not shorten it or drop any constraint. ")
-	b.WriteString("You may add structure per the skill guidance, but do not add new subjects.\n")
-	b.WriteString("The images are collected automatically from where image_gen saves them: ")
-	b.WriteString("do not copy, move, convert or save any image, and do not create or modify any files.\n\n")
-	// fmt.Fprintf(&b, "End your final message with exactly %d line(s) of the form `%s <file name of the saved image>`, ", job.N, finalImageMarker)
-	// b.WriteString("one per final image.\n\n")
-
-	b.WriteString("Request:\n<<<\n")
+	if job.Transparent {
+		attrs = append(attrs, "transparent background")
+	}
+	b.WriteString("\nImage request")
+	if len(attrs) > 0 {
+		fmt.Fprintf(&b, " (%s)", strings.Join(attrs, "; "))
+	}
+	b.WriteString(":\n")
 	b.WriteString(strings.TrimSpace(job.Prompt))
-	b.WriteString("\n>>>\n")
+	b.WriteString("\n")
 	return b.String()
 }
 

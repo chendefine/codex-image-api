@@ -226,7 +226,7 @@ func TestGenerations(t *testing.T) {
 		t.Errorf("workdir %s is not named after X-Request-Id %q", wd, id)
 	}
 	stdin := readFile(t, filepath.Join(wd, "stdin.txt"))
-	for _, want := range []string{"$imagegen", "Deliver exactly 2 final images", "transparent_background=true", "a red apple", "1:1 (width:height) aspect ratio, square"} {
+	for _, want := range []string{"$imagegen", "Deliver 2 separate image files, each fulfilling the whole request on its own.", "Image request (aspect ratio 1:1, square; transparent background):\na red apple"} {
 		if !strings.Contains(stdin, want) {
 			t.Errorf("stdin prompt missing %q", want)
 		}
@@ -252,7 +252,7 @@ func TestGenerationsWithoutN(t *testing.T) {
 	if len(rsp.Data) != 3 {
 		t.Fatalf("got %d images, want all 3 generated", len(rsp.Data))
 	}
-	if stdin := readFile(t, filepath.Join(onlyWorkdir(t, env.cfg), "stdin.txt")); strings.Contains(stdin, "Deliver exactly") {
+	if stdin := readFile(t, filepath.Join(onlyWorkdir(t, env.cfg), "stdin.txt")); strings.Contains(stdin, "Deliver ") {
 		t.Errorf("prompt without n must not set an image count:\n%s", stdin)
 	}
 }
@@ -296,8 +296,7 @@ func TestEditsMultipart(t *testing.T) {
 		t.Errorf("input images not passed via -i:\n%s", args)
 	}
 	stdin := readFile(t, filepath.Join(wd, "stdin.txt"))
-	if !strings.Contains(stdin, "[Image #1] ... [Image #2]") || !strings.Contains(stdin, "edit the input image(s)") ||
-		!strings.Contains(stdin, "3:2 (width:height) aspect ratio, landscape") {
+	if !strings.Contains(stdin, "Image request (aspect ratio 3:2, landscape):") {
 		t.Errorf("edit prompt wrong:\n%s", stdin)
 	}
 	if strings.Contains(stdin, wd) {

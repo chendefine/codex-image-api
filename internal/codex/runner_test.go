@@ -18,77 +18,32 @@ import (
 	"github.com/chendefine/codex-image-api/internal/config"
 )
 
-func TestBuildPromptGenerate(t *testing.T) {
-	p := BuildPrompt(Job{Prompt: "  a red apple  ", N: 1})
+func TestBuildPromptMinimal(t *testing.T) {
+	const head = "$imagegen\nNon-interactive preview job: don't ask questions, don't save or copy any files.\n"
+	cases := []struct {
+		job  Job
+		want string
+	}{
+		{Job{Prompt: "  a red apple  "}, head + "\nImage request:\na red apple\n"},
+		{Job{Prompt: "a red apple", N: 1}, head + "Deliver 1 image file, fulfilling the whole request on its own.\n\nImage request:\na red apple\n"},
+	}
+	for _, tc := range cases {
+		if p := BuildPrompt(tc.job); p != tc.want {
+			t.Errorf("BuildPrompt(%+v) =\n%s\nwant\n%s", tc.job, p, tc.want)
+		}
+	}
+}
+
+func TestBuildPromptOptions(t *testing.T) {
+	p := BuildPrompt(Job{Prompt: "make it green", N: 3, Transparent: true, AspectRatio: "9:16", InputImages: []string{"/a/1.png", "/a/2.jpg"}})
 	if !strings.HasPrefix(p, "$imagegen\n") {
 		t.Fatalf("prompt must start with the $imagegen skill mention:\n%s", p)
 	}
-	for _, want := range []string{
-		"generate a brand-new image",
-		"Deliver exactly 1 final image for this request",
-		"call image_gen more than once per image",
-		"do not copy, move, convert or save any image, and do not create or modify any files.",
-		"<<<\na red apple\n>>>",
-	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("prompt missing %q:\n%s", want, p)
-		}
+	if !strings.Contains(p, "\nDeliver 3 separate image files, each fulfilling the whole request on its own.\n\nImage request (aspect ratio 9:16, portrait; transparent background):\nmake it green\n") {
+		t.Errorf("prompt missing options:\n%s", p)
 	}
-	if strings.Contains(p, "output/") || strings.Contains(p, "image_1.png") {
-		t.Errorf("prompt must not name an output location:\n%s", p)
-	}
-	if strings.Contains(p, "transparent_background") {
-		t.Errorf("non-transparent prompt must not mention transparent_background:\n%s", p)
-	}
-	if strings.Contains(p, "referenced_image_paths, in this order") {
-		t.Errorf("generate prompt must not list input images")
-	}
-}
-
-func TestBuildPromptEdit(t *testing.T) {
-	job := Job{Prompt: "make it green", N: 3, Transparent: true, InputImages: []string{"/a/1.png", "/a/2.jpg"}}
-	p := BuildPrompt(job)
-	for _, want := range []string{
-		"edit the input image(s)",
-		"Deliver exactly 3 final images for this request",
-		"transparent_background=true on every call",
-		"[Image #1] ... [Image #2]",
-		"referenced_image_paths",
-	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("prompt missing %q:\n%s", want, p)
-		}
-	}
-	if strings.Contains(p, "/a/") {
-		t.Errorf("prompt must not contain input image paths:\n%s", p)
-	}
-}
-
-func TestBuildPromptEditSingleImage(t *testing.T) {
-	p := BuildPrompt(Job{Prompt: "make it green", N: 1, InputImages: []string{"/a/1.png"}})
-	for _, want := range []string{
-		"attached to this message as [Image #1]; use it as the edit target of every image_gen call",
-		"referenced_image_paths",
-	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("prompt missing %q:\n%s", want, p)
-		}
-	}
-	if strings.Contains(p, "in that order") || strings.Contains(p, "[Image #2]") {
-		t.Errorf("single-image prompt must not mention ordering:\n%s", p)
-	}
-}
-
-func TestBuildPromptUnspecifiedN(t *testing.T) {
-	p := BuildPrompt(Job{Prompt: "x"})
-	for _, unwanted := range []string{"Deliver exactly", "more than once per image", "transparent_background"} {
-		if strings.Contains(p, unwanted) {
-			t.Errorf("prompt without n must not contain %q:\n%s", unwanted, p)
-		}
-	}
-	p = BuildPrompt(Job{Prompt: "x", Transparent: true})
-	if !strings.Contains(p, "Set transparent_background=true on every image_gen call.") || strings.Contains(p, "Deliver exactly") {
-		t.Errorf("transparent prompt without n:\n%s", p)
+	if strings.Contains(p, "/a/") || strings.Contains(p, "Image #") {
+		t.Errorf("prompt must not mention input images:\n%s", p)
 	}
 }
 
@@ -118,16 +73,6 @@ func TestSelectFinal(t *testing.T) {
 		if got := paths(selectFinal(images, ids, c.final, c.n)); got != c.want {
 			t.Errorf("selectFinal(final=%v, n=%d) = %s, want %s", c.final, c.n, got, c.want)
 		}
-	}
-}
-
-func TestBuildPromptAspectRatio(t *testing.T) {
-	if p := BuildPrompt(Job{Prompt: "x", N: 1}); strings.Contains(p, "aspect ratio") {
-		t.Errorf("no size: prompt must not mention an aspect ratio:\n%s", p)
-	}
-	p := BuildPrompt(Job{Prompt: "x", N: 1, AspectRatio: "9:16"})
-	if !strings.Contains(p, "9:16 (width:height) aspect ratio, portrait") {
-		t.Errorf("prompt missing aspect ratio:\n%s", p)
 	}
 }
 
@@ -175,7 +120,10 @@ func TestBuildArgs(t *testing.T) {
 	wd := &Workdir{Dir: "/ws/d"}
 	args := r.BuildArgs(wd, Job{InputImages: []string{"/ws/d/input/image_1.png", "/ws/d/input/image_2.png"}})
 	want := []string{"exec", "--skip-git-repo-check", "--json", "-C", "/ws/d", "-s", "workspace-write",
-		"-o", "/ws/d/last_message.txt", "-m", "gpt-x", "-p", "img", "-c", "a=1",
+		"-o", "/ws/d/last_message.txt",
+		"-c", "project_doc_max_bytes=0", "-c", "analytics.enabled=false",
+		"-c", `otel.metrics_exporter="none"`, "-c", `otel.exporter="none"`, "-c", `otel.trace_exporter="none"`,
+		"-m", "gpt-x", "-p", "img", "-c", "a=1",
 		"-i", "/ws/d/input/image_1.png", "-i", "/ws/d/input/image_2.png"}
 	if !slices.Equal(args, want) {
 		t.Fatalf("args mismatch\n got: %q\nwant: %q", args, want)
