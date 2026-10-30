@@ -13,7 +13,7 @@ services:
         GO_VERSION: ${GO_VERSION:-1.27}
         GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:13-slim}
-        CODEX_VERSION: ${CODEX_VERSION:-0.162.0}
+        CODEX_VERSION: ${CODEX_VERSION:-0.166.0}
         CODEX_DOWNLOAD_BASE: ${CODEX_DOWNLOAD_BASE:-https://github.com/openai/codex/releases/download}
     restart: unless-stopped
     hostname: codex-image-api

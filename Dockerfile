@@ -19,7 +19,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # ---- runner: codex-image-api + codex CLI ----
 FROM ${RUNTIME_IMAGE} AS runner
 # Codex release tag without the "rust-v" prefix, see https://github.com/openai/codex/releases
-ARG CODEX_VERSION=0.162.0
+ARG CODEX_VERSION=0.166.0
 ARG CODEX_DOWNLOAD_BASE=https://github.com/openai/codex/releases/download
 
 # tzdata lets TZ (e.g. Asia/Shanghai) set the container's timezone; unset means UTC.
