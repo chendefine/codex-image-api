@@ -48,7 +48,7 @@ docker/                镜像内置配置 config.yaml、入口脚本 entrypoint.
 3. `auth` 只在 `server.api_keys` 非空时生效，用 SHA-256 摘要做常量时间比较来校验 Bearer token。
 4. 业务 handler 的签名是 `func(*gin.Context) (T, error)`，经泛型 `handle(s, fn)` 适配：成功时写 JSON，失败时交给 `writeError`。
 5. handler 内手动解析请求体（`request.go`）：`decodeJSON` 带大小限制并拒绝尾随数据；`buildJob` 校验 `prompt`、`n`、`background`、`size`。edits 按 Content-Type 分 multipart 和 JSON 两条路径（`edits.go`），统一成 `editInput` 后由 `saveInputs` 写入 `input/`。
-6. 依次调用 `runner.NewWorkdir(id)` → `defer runner.Cleanup` → `s.execute` → `runner.Run`。
+6. 依次调用 `runner.NewWorkdir(id)` → `defer runner.Cleanup` → `saveRequest`（把请求写到 `request.json`：`decodeJSON` 返回的原始 JSON 或 multipart 表单字段，输入图片替换为 `input/` 下的文件名，mask 替换为 `"(ignored)"`）→ `s.execute` → `runner.Run`。
 
 ### 错误
 

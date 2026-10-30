@@ -217,6 +217,7 @@ On SIGINT/SIGTERM the server stops accepting connections and gives in-flight req
 
 ```text
 <workspace.dir>/<YYYYMMDD>/<request-id>/   same as X-Request-Id
+  request.json        API request body; input images replaced by their file names under input/, mask by "(ignored)"
   prompt.txt          full prompt sent to Codex (on stdin)
   input/image_N.*     input images (edit requests only)
   output/image_N.*    collected output images

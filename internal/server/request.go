@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -21,11 +24,16 @@ const (
 )
 
 // decodeJSON decodes exactly one JSON value of at most limit bytes from the
-// request body. The trailing-data check reads the body to EOF, which lets
-// net/http notice a client disconnect while codex runs.
-func decodeJSON(c *gin.Context, limit int64, v any) error {
+// request body into v and also returns the raw value. The trailing-data check
+// reads the body to EOF, which lets net/http notice a client disconnect while
+// codex runs.
+func decodeJSON(c *gin.Context, limit int64, v any) (json.RawMessage, error) {
 	dec := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, limit))
-	err := dec.Decode(v)
+	var raw json.RawMessage
+	err := dec.Decode(&raw)
+	if err == nil {
+		err = json.Unmarshal(raw, v)
+	}
 	if err == nil {
 		// Token, unlike More, also rejects a stray '}' or ']'.
 		if _, tokErr := dec.Token(); tokErr != io.EOF {
@@ -38,13 +46,42 @@ func decodeJSON(c *gin.Context, limit int64, v any) error {
 	var maxErr *http.MaxBytesError
 	switch {
 	case err == nil:
-		return nil
+		return raw, nil
 	case errors.As(err, &maxErr):
-		return invalidRequest("", "Request body is too large.")
+		return nil, invalidRequest("", "Request body is too large.")
 	case errors.Is(err, io.EOF):
-		return invalidRequest("", "We could not parse the JSON body of your request: the body is empty")
+		return nil, invalidRequest("", "We could not parse the JSON body of your request: the body is empty")
 	}
-	return invalidRequest("", "We could not parse the JSON body of your request: %v", err)
+	return nil, invalidRequest("", "We could not parse the JSON body of your request: %v", err)
+}
+
+// jsonRecord turns a raw JSON object body into a request record whose fields
+// can be replaced before saveRequest writes it. Values are decoded rather than
+// kept raw so that \u escapes from the client come out readable; UseNumber
+// keeps numbers exact.
+func jsonRecord(raw json.RawMessage) map[string]any {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var record map[string]any
+	_ = dec.Decode(&record)
+	if record == nil {
+		record = map[string]any{}
+	}
+	return record
+}
+
+// saveRequest writes the API request record to <workdir>/request.json.
+// Input images appear only as their file names under input/. Best effort,
+// like prompt.txt: the file is for debugging only.
+func saveRequest(wd *codex.Workdir, record map[string]any) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(record); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(wd.Dir, "request.json"), buf.Bytes(), 0o644)
 }
 
 // buildJob validates the parameters the built-in image_gen tool understands.

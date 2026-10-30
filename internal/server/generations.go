@@ -7,7 +7,8 @@ import (
 // generations implements POST /v1/images/generations.
 func (s *Server) generations(c *gin.Context) (*ImagesResponse, error) {
 	var req GenerationRequest
-	if err := decodeJSON(c, maxJSONBody, &req); err != nil {
+	raw, err := decodeJSON(c, maxJSONBody, &req)
+	if err != nil {
 		return nil, err
 	}
 	job, err := s.buildJob(req.Prompt, req.N, req.Background, req.Size)
@@ -21,5 +22,6 @@ func (s *Server) generations(c *gin.Context) (*ImagesResponse, error) {
 	}
 	ctx := c.Request.Context()
 	defer s.runner.Cleanup(ctx, wd)
+	saveRequest(wd, jsonRecord(raw))
 	return s.execute(ctx, wd, job)
 }

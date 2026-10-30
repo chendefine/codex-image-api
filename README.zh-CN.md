@@ -217,6 +217,7 @@ Codex 内置 `image_gen` 工具只有 `prompt`、`transparent_background`、`ref
 
 ```text
 <workspace.dir>/<YYYYMMDD>/<request-id>/   与 X-Request-Id 相同
+  request.json        API 请求体；输入图片替换为 input/ 下的文件名，mask 替换为 "(ignored)"
   prompt.txt          发给 Codex 的完整 prompt（经 stdin 传入）
   input/image_N.*     输入图片（仅编辑请求）
   output/image_N.*    收集到的输出图片

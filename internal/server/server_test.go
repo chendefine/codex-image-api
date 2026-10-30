@@ -234,6 +234,11 @@ func TestGenerations(t *testing.T) {
 	if strings.Contains(stdin, wd) {
 		t.Errorf("prompt must not reveal the workdir/output path:\n%s", stdin)
 	}
+	var record map[string]any
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(wd, "request.json"))), &record); err != nil ||
+		record["prompt"] != "a red apple" || record["quality"] != "high" || record["n"] != 2.0 {
+		t.Errorf("request.json = %v, %v", record, err)
+	}
 	args := readFile(t, filepath.Join(wd, "args.txt"))
 	if strings.Contains(args, "\n-i\n") || strings.Contains(args, "\n-\n") {
 		t.Errorf("unexpected args:\n%s", args)
@@ -302,6 +307,12 @@ func TestEditsMultipart(t *testing.T) {
 	if strings.Contains(stdin, wd) {
 		t.Errorf("edit prompt must not contain paths:\n%s", stdin)
 	}
+	if got := readFile(t, filepath.Join(wd, "request.json")); !strings.Contains(got, `"image": [
+    "image_1.png",
+    "image_2.png"
+  ]`) || !strings.Contains(got, `"size": "1536x1024"`) || !strings.Contains(got, `"mask": "(ignored)"`) {
+		t.Errorf("request.json:\n%s", got)
+	}
 	assertGeneratedRemoved(t, env)
 }
 
@@ -328,6 +339,12 @@ func TestEditsJSONDataURL(t *testing.T) {
 	wd := onlyWorkdir(t, env.cfg)
 	if _, err := os.Stat(filepath.Join(wd, "input", "image_1.png")); err != nil {
 		t.Errorf("input not saved: %v", err)
+	}
+	if got := readFile(t, filepath.Join(wd, "request.json")); strings.Contains(got, "base64") ||
+		!strings.Contains(got, `"images": [
+    "image_1.png"
+  ]`) || !strings.Contains(got, `"prompt": "make it blue"`) {
+		t.Errorf("request.json:\n%s", got)
 	}
 	if stdin := readFile(t, filepath.Join(wd, "stdin.txt")); strings.Contains(stdin, "aspect ratio") {
 		t.Errorf("prompt must not mention an aspect ratio without size:\n%s", stdin)

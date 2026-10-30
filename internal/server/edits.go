@@ -20,6 +20,9 @@ import (
 
 const multipartMemory = 32 << 20
 
+// ignoredMask stands in for the mask in request.json: it is not saved.
+const ignoredMask = "(ignored)"
+
 var imageExts = map[string]string{
 	"image/png":  ".png",
 	"image/jpeg": ".jpg",
@@ -34,6 +37,10 @@ type editInput struct {
 	background *string
 	size       *string
 	images     [][]byte
+	// record is the request as saved to request.json; the input images are
+	// replaced by their file names under imagesKey.
+	imagesKey string
+	record    map[string]any
 }
 
 // edits implements POST /v1/images/edits for multipart/form-data and JSON bodies.
@@ -74,6 +81,12 @@ func (s *Server) edits(c *gin.Context) (*ImagesResponse, error) {
 	if job.InputImages, err = saveInputs(wd, in.images); err != nil {
 		return nil, err
 	}
+	names := make([]string, len(job.InputImages))
+	for i, p := range job.InputImages {
+		names[i] = filepath.Base(p)
+	}
+	in.record[in.imagesKey] = names
+	saveRequest(wd, in.record)
 	return s.execute(ctx, wd, job)
 }
 
@@ -88,7 +101,17 @@ func (s *Server) parseMultipartEdit(c *gin.Context) (*editInput, error) {
 		return nil, invalidRequest("", "Failed to parse multipart form: %v", err)
 	}
 	form := c.Request.MultipartForm
-	in := &editInput{prompt: formValue(form, "prompt")}
+	in := &editInput{prompt: formValue(form, "prompt"), imagesKey: "image", record: map[string]any{}}
+	for k, v := range form.Value {
+		if len(v) == 1 {
+			in.record[k] = v[0]
+		} else {
+			in.record[k] = v
+		}
+	}
+	if len(form.File["mask"]) > 0 {
+		in.record["mask"] = ignoredMask
+	}
 	if v := formValue(form, "n"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -126,10 +149,15 @@ func (s *Server) parseJSONEdit(c *gin.Context) (*editInput, error) {
 	// Base64 data URLs are ~4/3 of the raw size.
 	limit := int64(s.cfg.Limits.MaxImages+1)*s.cfg.Limits.MaxImageBytes*4/3 + maxJSONBody
 	var req EditJSONRequest
-	if err := decodeJSON(c, limit, &req); err != nil {
+	raw, err := decodeJSON(c, limit, &req)
+	if err != nil {
 		return nil, err
 	}
-	in := &editInput{prompt: req.Prompt, n: req.N, background: req.Background, size: req.Size}
+	in := &editInput{prompt: req.Prompt, n: req.N, background: req.Background, size: req.Size,
+		imagesKey: "images", record: jsonRecord(raw)}
+	if req.Mask != nil {
+		in.record["mask"] = ignoredMask
+	}
 	if len(req.Images) > s.cfg.Limits.MaxImages {
 		return nil, invalidRequest("images", "At most %d input images are allowed.", s.cfg.Limits.MaxImages)
 	}
