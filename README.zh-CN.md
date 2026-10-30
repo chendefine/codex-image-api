@@ -27,6 +27,7 @@
 - **并发与排队**：可以设置同时运行的 Codex 进程数。等待的请求进入有界队列，超出时返回 `503` 并带 `Retry-After`。
 - **OpenAI 错误格式**：所有错误（包括 404/405、鉴权失败和 panic）都使用 OpenAI 错误信封。
 - **便于排查**：每个请求有独立的工作目录，保存 prompt、输入图片、输出图片和 Codex 日志，保留时长可配置。
+- **登录态保活**：每天检查 `auth.json` 中的 ChatGPT 令牌，并在过期前刷新。
 - **优雅关闭**：进行中的请求可以先完成，宽限期过后仍未完成的会被终止并清理。
 - **现成的 Docker 镜像**：支持 `linux/amd64` 和 `linux/arm64`，可以用任意 UID/GID 运行。
 
@@ -128,11 +129,14 @@ with open("fox.png", "wb") as f:
 | `codex.model` | `""` | 作为 `codex exec -m` 传入；为空时使用 Codex `config.toml` 中的模型。 |
 | `codex.profile` | `""` | 作为 `codex exec -p` 传入。 |
 | `codex.sandbox` | `workspace-write` | `read-only`、`workspace-write` 或 `danger-full-access`；Docker 中使用 `danger-full-access`。 |
-| `codex.codex_home` | `$CODEX_HOME` 或 `~/.codex` | Codex 存放会话和生成图片的目录。 |
+| `codex.codex_home` | `$CODEX_HOME` 或 `~/.codex` | Codex 存放会话、生成图片和 `auth.json` 的目录。 |
 | `codex.timeout` | `15m` | 单次 Codex 运行的时限，从请求拿到执行槽位时开始计时。 |
 | `codex.max_concurrency` | `2` | 同时运行的 Codex 进程数上限。 |
 | `codex.max_queue` | `16` | 等待槽位的请求数上限。 |
 | `codex.queue_timeout` | `5m` | 请求等待槽位的最长时间。 |
+| `codex.token_refresh.enabled` | `true` | 每天检查 `auth.json` 中的 ChatGPT 登录态，并在过期前主动刷新。见[登录令牌刷新](#登录令牌刷新)。 |
+| `codex.token_refresh.at` | `00:00:00` | 每天检查的本地时间，格式为 `HH:MM` 或 `HH:MM:SS`。 |
+| `codex.token_refresh.threshold` | `25h` | access token 剩余有效期小于该时长时刷新。 |
 | `codex.extra_args` | `[]` | 追加给 `codex exec` 的参数，如 `["-c", "model_reasoning_effort=\"low\""]`。它们排在内置的 `-c` 覆盖项（不加载 `AGENTS.md`、关闭遥测）之后，同一个键以后写的为准。 |
 | `codex.env` | `{}` | 传给 Codex 的额外环境变量。 |
 | `limits.max_image_bytes` | `52428800`（50 MiB） | 单张输入图片的大小上限。 |
@@ -213,6 +217,14 @@ Codex 内置 `image_gen` 工具只有 `prompt`、`transparent_background`、`ref
 
 收到 SIGINT/SIGTERM 后，服务停止接受新连接，进行中的请求最多再运行 `server.shutdown_timeout`。到期后仍在运行的请求会被取消：对应的 Codex 进程组被杀掉，`$CODEX_HOME` 中的临时文件照常清理，然后进程退出。第二次 Ctrl+C 会立即退出。
 
+### 登录令牌刷新
+
+Codex 只在 ChatGPT access token（有效期约 10 天）距过期不足 5 分钟、且有请求要用它时才刷新。多个 Codex 进程同时运行时，它们可能在同一时刻争着轮换 refresh token；登录态已无法刷新时，也要等到请求失败才会被发现。
+
+因此服务在启动时以及每天 `codex.token_refresh.at`（本地时间）读取 `$CODEX_HOME/auth.json` 中 `tokens.access_token` 的 `exp`。剩余有效期小于 `codex.token_refresh.threshold` 时，服务启动 `codex app-server` 并发送 `refreshToken: true` 的 `account/read`，让 Codex 刷新令牌并写回 `auth.json`；服务关闭其 stdin 后 Codex 自行退出。随后服务会重新读取 `auth.json`，因为刷新失败时 `account/read` 同样返回成功；如果新令牌的过期时间没有延后，就记一条错误日志。
+
+日志依次为 `codex token ok`、`refreshing codex token`、`codex token refreshed`，失败时为 `codex token check`（ERROR 级别）。`auth.json` 中没有 ChatGPT 令牌时（API key 登录，或凭据存放在系统 keyring 中），记一条 `codex token check skipped` 后不做任何事。设置 `codex.token_refresh.enabled: false` 可关闭检查。
+
 ### 工作目录
 
 ```text
@@ -262,10 +274,10 @@ Codex 内置 `image_gen` 工具只有 `prompt`、`transparent_background`、`ref
   - ID 须为不带前导零的十进制数（0 ~ 4294967294）。`0` 表示以 root 运行，适用于 rootless Docker/Podman。
   - `APP_UID` 必须是 `CODEX_AUTH_FILE` 的属主（用 `stat -c '%u %g' ~/.codex/auth.json` 查看，文件权限为 0600），也必须是 `CODEX_HOME_DIR` 和 `WORKSPACE_DIR` 的属主。
   - 入口脚本**不会** chown 挂载的目录，属主不符时直接报错退出。修改 UID 后需要自己在宿主机上 `chown -R`。
-- **auth.json**：Codex 刷新 token 时会原地改写这个文件，而刷新令牌会轮换。如果容器写不回新令牌，宿主机上的 Codex 就会掉线。容器不读宿主机的 `config.toml`，模型等设置请用 `codex.model` 或 `codex.extra_args` 指定。
+- **auth.json**：Codex 刷新 token 时（无论是自行刷新，还是通过每天的[登录令牌刷新](#登录令牌刷新)）会原地改写这个文件，而刷新令牌会轮换。如果容器写不回新令牌，宿主机上的 Codex 就会掉线。容器不读宿主机的 `config.toml`，模型等设置请用 `codex.model` 或 `codex.extra_args` 指定。
 - **沙箱**：在 Docker 默认的 seccomp/AppArmor 配置下，Codex 的 bubblewrap 沙箱无法创建命名空间。请使用 `codex.sandbox: danger-full-access`，以容器作为隔离边界。
 - **网络**：容器需要能访问 `chatgpt.com`。宿主机经代理上网时设置 `HTTPS_PROXY`，代理在宿主机上时用 `host.docker.internal` 作为地址。宿主机路径 MTU 小于 1500 时设置 `NETWORK_MTU`，否则 TLS 握手会卡住，Codex 报 `workspace routing discovery failed`。
-- **时区**：镜像内置 `tzdata`。用 `TZ` 指定 IANA 时区名，如 `Asia/Shanghai`（默认 `UTC`），它影响日志时间戳以及会话和工作目录的日期目录。
+- **时区**：镜像内置 `tzdata`。用 `TZ` 指定 IANA 时区名，如 `Asia/Shanghai`（默认 `UTC`），它影响日志时间戳、会话和工作目录的日期目录，以及每天清理和 `codex.token_refresh.at` 检查的时间。
 - 其余构建和运行参数（Go 版本、`GOPROXY`、`CODEX_VERSION`、下载镜像、监听地址和端口等）见 [.env.example](.env.example)。
 
 ### 预构建镜像

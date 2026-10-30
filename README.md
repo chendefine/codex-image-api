@@ -27,6 +27,7 @@ An OpenAI-compatible image API backed by [Codex CLI](https://github.com/openai/c
 - **Concurrency and queueing**: you set how many Codex processes run at once. Waiting requests sit in a bounded queue, and overflow gets `503` with `Retry-After`.
 - **OpenAI error format**: every error, including 404/405, auth failures and panics, uses the OpenAI error envelope.
 - **Easy to debug**: each request gets its own working directory with the prompt, input images, output images and Codex logs. Retention is configurable.
+- **Login kept fresh**: the ChatGPT token in `auth.json` is checked daily and refreshed before it expires.
 - **Graceful shutdown**: in-flight requests can finish, and anything still running after the grace period is killed and cleaned up.
 - **Ready-made Docker image** for `linux/amd64` and `linux/arm64`. It runs as any UID/GID you choose.
 
@@ -128,11 +129,14 @@ The server reads a YAML file given by `-config` (default `config.yaml`). See the
 | `codex.model` | `""` | Passed as `codex exec -m`. Empty uses the model from Codex's `config.toml`. |
 | `codex.profile` | `""` | Passed as `codex exec -p`. |
 | `codex.sandbox` | `workspace-write` | `read-only`, `workspace-write` or `danger-full-access`. Use `danger-full-access` in Docker. |
-| `codex.codex_home` | `$CODEX_HOME` or `~/.codex` | Where Codex stores sessions and generated images. |
+| `codex.codex_home` | `$CODEX_HOME` or `~/.codex` | Where Codex stores sessions, generated images and `auth.json`. |
 | `codex.timeout` | `15m` | Time limit for one Codex run. The clock starts once the request gets an execution slot. |
 | `codex.max_concurrency` | `2` | Maximum number of Codex processes running at once. |
 | `codex.max_queue` | `16` | Maximum number of requests waiting for a slot. |
 | `codex.queue_timeout` | `5m` | Maximum time a request waits for a slot. |
+| `codex.token_refresh.enabled` | `true` | Check the ChatGPT login in `auth.json` daily and refresh it ahead of expiry. See [Login token refresh](#login-token-refresh). |
+| `codex.token_refresh.at` | `00:00:00` | Local time of the daily check, `HH:MM` or `HH:MM:SS`. |
+| `codex.token_refresh.threshold` | `25h` | Refresh when the access token expires within this duration. |
 | `codex.extra_args` | `[]` | Extra arguments for `codex exec`, e.g. `["-c", "model_reasoning_effort=\"low\""]`. They follow the built-in `-c` overrides (no `AGENTS.md`, no telemetry), so a later `-c` for the same key wins. |
 | `codex.env` | `{}` | Extra environment variables for Codex. |
 | `limits.max_image_bytes` | `52428800` (50 MiB) | Maximum size of each input image. |
@@ -213,6 +217,14 @@ Clients can send `X-Client-Request-Id`. The server keeps only printable ASCII, c
 
 On SIGINT/SIGTERM the server stops accepting connections and gives in-flight requests up to `server.shutdown_timeout`. Requests still running after that are canceled, which kills their Codex process groups and removes their temporary files from `$CODEX_HOME`. Then the server exits. A second Ctrl+C exits right away.
 
+### Login token refresh
+
+Codex only refreshes its ChatGPT access token (valid for about 10 days) when the token is within 5 minutes of expiry, and only when a request needs it. With several Codex processes running at once, they may all try to rotate the refresh token at the same moment. A login that can no longer be refreshed also goes unnoticed until a request fails.
+
+So at startup and then every day at `codex.token_refresh.at` (local time), the server reads the `exp` claim of `tokens.access_token` in `$CODEX_HOME/auth.json`. If it expires within `codex.token_refresh.threshold`, the server runs `codex app-server` and sends `account/read` with `refreshToken: true`, which makes Codex refresh the token and write it back to `auth.json`. Codex exits once the server closes its stdin. The server then reads `auth.json` again, because `account/read` reports success even when the refresh failed. A token that expires no later than before is logged as an error.
+
+Log lines: `codex token ok`, `refreshing codex token`, `codex token refreshed`, or `codex token check` (level ERROR) on failure. Without a ChatGPT token in `auth.json` (API key login, or credentials kept in the OS keyring) the check logs `codex token check skipped` and does nothing. Set `codex.token_refresh.enabled: false` to turn the check off.
+
 ### Working directories
 
 ```text
@@ -262,10 +274,10 @@ The [Dockerfile](Dockerfile) has two stages. `builder` compiles the server; it r
   - IDs must be plain decimal with no leading zeros (0–4294967294). `0` runs as root, which suits rootless Docker/Podman.
   - `APP_UID` must own `CODEX_AUTH_FILE` (check with `stat -c '%u %g' ~/.codex/auth.json`; the file is mode 0600). It must also own `CODEX_HOME_DIR` and `WORKSPACE_DIR`.
   - The entrypoint **never** chowns bind mounts. It exits with an error if their owner is wrong. After changing the UID, run `chown -R` on the host yourself.
-- **auth.json.** Codex rewrites this file in place when it refreshes the token, and refresh tokens rotate. If the container can't write the new token back, the host's Codex gets logged out. The container doesn't read the host's `config.toml`, so set the model through `codex.model` or `codex.extra_args`.
+- **auth.json.** Codex rewrites this file in place when it refreshes the token (on its own, or through the daily [login token refresh](#login-token-refresh)), and refresh tokens rotate. If the container can't write the new token back, the host's Codex gets logged out. The container doesn't read the host's `config.toml`, so set the model through `codex.model` or `codex.extra_args`.
 - **Sandbox.** Under Docker's default seccomp/AppArmor profiles, Codex's bubblewrap sandbox can't create namespaces. Use `codex.sandbox: danger-full-access` and treat the container as the isolation boundary.
 - **Network.** The container must reach `chatgpt.com`. If the host uses a proxy, set `HTTPS_PROXY`, using `host.docker.internal` for a proxy running on the host. If the host's path MTU is below 1500, set `NETWORK_MTU`; otherwise TLS handshakes hang and Codex reports `workspace routing discovery failed`.
-- **Timezone.** The image includes `tzdata`. Set `TZ` to an IANA name such as `Asia/Shanghai` (default `UTC`). It affects log timestamps and the date directories for sessions and working directories.
+- **Timezone.** The image includes `tzdata`. Set `TZ` to an IANA name such as `Asia/Shanghai` (default `UTC`). It affects log timestamps, the date directories for sessions and working directories, and the time of the daily pruning and `codex.token_refresh.at` check.
 - Other build and runtime options (Go version, `GOPROXY`, `CODEX_VERSION`, download mirror, bind address and port) are documented in [.env.example](.env.example).
 
 ### Prebuilt images

@@ -64,6 +64,7 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger, ln net.Li
 	}
 	runner := codex.NewRunner(cfg, logger)
 	go runner.RunPruner(ctx)
+	go runner.RunTokenRefresher(ctx)
 	// Every request context derives from baseCtx, so canceling it aborts all
 	// in-flight codex runs (their process groups are killed and cleaned up).
 	baseCtx, cancelRequests := context.WithCancelCause(context.Background())

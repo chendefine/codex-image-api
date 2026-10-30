@@ -23,6 +23,12 @@ codex:
   max_concurrency: 4
   max_queue: 32
   queue_timeout: 5m
+  # Daily ChatGPT login check at `at` (local time, TZ); refreshes auth.json
+  # through `codex app-server` when the access token expires within `threshold`.
+  token_refresh:
+    enabled: true
+    at: "00:00:00"
+    threshold: 25h
   extra_args: []
   env: {}
 

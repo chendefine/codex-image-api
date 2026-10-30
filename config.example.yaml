@@ -22,13 +22,20 @@ codex:
   model: ""            # codex exec -m; empty = model from ~/.codex/config.toml
   profile: ""          # codex exec -p
   sandbox: workspace-write
-  codex_home: ""       # where the built-in tool saves images; default $CODEX_HOME or ~/.codex
+  codex_home: ""       # sessions, generated images and auth.json; default $CODEX_HOME or ~/.codex
   timeout: 15m
   max_concurrency: 4
   # Requests beyond max_concurrency wait for a free slot: at most max_queue of
   # them, for at most queue_timeout; otherwise 503 with Retry-After.
   max_queue: 32
   queue_timeout: 5m
+  # Codex refreshes its ChatGPT access token (valid ~10 days) only within 5 minutes
+  # of expiry. At startup and every day at `at` (local time), check auth.json and
+  # refresh through `codex app-server` when the token expires within `threshold`.
+  token_refresh:
+    enabled: true
+    at: "00:00:00"     # HH:MM or HH:MM:SS
+    threshold: 25h
   # Appended verbatim to `codex exec`, e.g. ["-c", "model_reasoning_effort=\"low\""]
   # (after the built-in -c overrides that disable AGENTS.md loading and telemetry; later -c wins)
   extra_args: []

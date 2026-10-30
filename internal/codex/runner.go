@@ -235,14 +235,8 @@ func (r *Runner) Run(ctx context.Context, wd *Workdir, job Job) ([]Image, error)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.Env = os.Environ()
-	for k, v := range r.cfg.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
-	// Run codex in its own process group so cancellation also kills its children.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = 5 * time.Second
+	cmd.Env = r.env()
+	killGroupOnCancel(cmd)
 
 	started := time.Now()
 	logger.Info("codex exec start", "dir", wd.Dir, "n", job.N, "edit", job.IsEdit())
@@ -276,6 +270,23 @@ func (r *Runner) Run(ctx context.Context, wd *Workdir, job Job) ([]Image, error)
 		return nil, r.runError(wd, err)
 	}
 	return images, nil
+}
+
+// env returns the environment for codex processes: ours plus codex.env.
+func (r *Runner) env() []string {
+	env := os.Environ()
+	for k, v := range r.cfg.Env {
+		env = append(env, k+"="+v)
+	}
+	return env
+}
+
+// killGroupOnCancel runs cmd in its own process group so that cancellation
+// also kills its children.
+func killGroupOnCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
 }
 
 // collect gathers the images codex generated in thread tid, without relying on

@@ -98,6 +98,53 @@ type Codex struct {
 	MaxQueue int `yaml:"max_queue"`
 	// QueueTimeout is how long a request may wait for a free codex slot.
 	QueueTimeout time.Duration `yaml:"queue_timeout"`
+	// TokenRefresh proactively refreshes the ChatGPT login in auth.json.
+	TokenRefresh TokenRefresh `yaml:"token_refresh"`
+}
+
+// TokenRefresh is codex.token_refresh: once a day at At (local time) the
+// access token in $CODEX_HOME/auth.json is checked, and refreshed through
+// `codex app-server` when it expires within Threshold.
+type TokenRefresh struct {
+	// Enabled defaults to true when unset.
+	Enabled   *bool         `yaml:"enabled"`
+	At        ClockTime     `yaml:"at"`
+	Threshold time.Duration `yaml:"threshold"`
+}
+
+// IsEnabled reports whether the daily token check runs (default true).
+func (t TokenRefresh) IsEnabled() bool { return t.Enabled == nil || *t.Enabled }
+
+// ClockTime is a local time of day written as "HH:MM[:SS]"; the zero value is
+// midnight.
+type ClockTime struct {
+	h, m, s int
+}
+
+// Clock returns a ClockTime of h:m:s.
+func Clock(h, m, s int) ClockTime { return ClockTime{h, m, s} }
+
+func (c *ClockTime) UnmarshalYAML(node *yaml.Node) error {
+	for _, layout := range []string{"15:04:05", "15:04"} {
+		if t, err := time.Parse(layout, node.Value); err == nil && node.Kind == yaml.ScalarNode {
+			*c = ClockTime{t.Hour(), t.Minute(), t.Second()}
+			return nil
+		}
+	}
+	return fmt.Errorf("time of day must be HH:MM or HH:MM:SS, got %q", node.Value)
+}
+
+func (c ClockTime) String() string { return fmt.Sprintf("%02d:%02d:%02d", c.h, c.m, c.s) }
+
+// Next returns the first instant at this time of day strictly after now, in
+// now's location.
+func (c ClockTime) Next(now time.Time) time.Time {
+	y, m, d := now.Date()
+	t := time.Date(y, m, d, c.h, c.m, c.s, 0, now.Location())
+	if !t.After(now) {
+		t = time.Date(y, m, d+1, c.h, c.m, c.s, 0, now.Location())
+	}
+	return t
 }
 
 type Limits struct {
@@ -186,6 +233,9 @@ func (c *Config) normalize() error {
 	}
 	if c.Codex.QueueTimeout <= 0 {
 		c.Codex.QueueTimeout = 5 * time.Minute
+	}
+	if c.Codex.TokenRefresh.Threshold <= 0 {
+		c.Codex.TokenRefresh.Threshold = 25 * time.Hour
 	}
 
 	if c.Limits.MaxImageBytes <= 0 {

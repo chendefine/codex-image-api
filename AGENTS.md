@@ -72,11 +72,12 @@ docker/                镜像内置配置 config.yaml、入口脚本 entrypoint.
   - 进程：`BuildArgs` 中的 `-i` 必须放在最后（它是可变参数，会吞掉后续的位置参数）。`configOverrides` 固定传 `-c project_doc_max_bytes=0`（不加载 AGENTS.md：codex 会从 git 根目录一路读到工作目录，`workspace.dir` 在仓库内时会把仓库的 AGENTS.md 注入每次会话）和关闭遥测的 `analytics.enabled=false`、`otel.{exporter,trace_exporter,metrics_exporter}="none"`（`metrics_exporter` 默认发往 Statsig），放在 `extra_args` 之前，codex 中同一个键以后写的 `-c` 为准，因此 `extra_args` 可以覆盖它们。codex 在独立进程组中运行，超时或取消时整组 SIGKILL。
   - 收集：codex 结束后，从 `codex.jsonl` 的 `thread.started` 事件取 `thread_id`，读取 `$CODEX_HOME/sessions/*/*/*/rollout-*-<tid>.jsonl` 中已完成的 `image_gen.generation` 条目，按顺序到 `generated_images/<tid>/<item_id>.*` 取图；文件缺失时解码 rollout 中的 base64，没有 rollout 时按 mtime 兜底。再用 `selectFinal` 选图：按 `last_message.txt` 中 `FINAL_IMAGE:` 列出的 id（文件名去扩展名）依次选取，最多 `n` 张；一张都对不上时取最后 `n` 张。图片写入 `output/`。最后（包括失败时）用 `cleanupThread` 删除该 thread 的 `generated_images` 目录和 rollout 文件。从 codex 输出读到的 id 在拼路径前都要经过 `validID` 校验。
   - 清理：`Cleanup` 只在 `workspace.keep` 不为 0 **且 codex 实际运行过**时保留工作目录（`wd.ran`）；在 codex 启动前就被拒绝的请求一律删除工作目录。
+- **`token.go`**：`codex.token_refresh.enabled`（默认开）时，`RunTokenRefresher` 在启动时和每天本地 `codex.token_refresh.at`（默认 00:00:00）调用 `CheckToken`：解码 `$CODEX_HOME/auth.json` 中 `tokens.access_token` 的 JWT `exp`，剩余有效期小于 `threshold`（默认 25h）时启动 `codex app-server`（带 `configOverrides`），经 stdio JSON-RPC 发送 `initialize` → `initialized` → `account/read {refreshToken:true}`，收到 id=2 的响应后关闭 stdin 让 codex 退出。`account/read` 刷新失败也返回成功，所以之后必须重读 auth.json 确认 `exp` 已延后。codex 自身只在距过期 ≤5 分钟时才刷新。不占用 codex 并发槽位；没有 ChatGPT 令牌时返回 `ErrNoChatGPTToken`，仅记 warn。由 `main.go` 的 `run` 启动。
 - **`prune.go`**：`workspace.keep = N` 时，`RunPruner` 在启动时和每天本地 0 点删除早于"今天 − N 天"的 `<YYYYMMDD>` 目录，由 `main.go` 的 `run` 启动。
 
 ### internal/config
 
-负责 YAML 加载、默认值（`normalize`）和校验。`workspace.dir` 必填，会被转成绝对路径；`codex.sandbox` 只允许 `read-only`、`workspace-write`、`danger-full-access`；`limits.max_n` 上限为 10；`limits.max_images` 上限为 5（内置 `image_gen` 最多接受 5 张参考图）。`workspace.keep` 是 `*Keep` 类型，YAML 中可以写 bool 或天数：`false`/`0` 表示请求结束即删，`N` 表示保留 N 天，`true` 或不设置表示永久保留。用 `KeepWorkdirs()`、`RetentionDays()` 读取，构造用 `KeepDays(n)` 或 `KeepForever()`。
+负责 YAML 加载、默认值（`normalize`）和校验。`workspace.dir` 必填，会被转成绝对路径；`codex.sandbox` 只允许 `read-only`、`workspace-write`、`danger-full-access`；`limits.max_n` 上限为 10；`limits.max_images` 上限为 5（内置 `image_gen` 最多接受 5 张参考图）。`workspace.keep` 是 `*Keep` 类型，YAML 中可以写 bool 或天数：`false`/`0` 表示请求结束即删，`N` 表示保留 N 天，`true` 或不设置表示永久保留。用 `KeepWorkdirs()`、`RetentionDays()` 读取，构造用 `KeepDays(n)` 或 `KeepForever()`。`codex.token_refresh.at` 是 `ClockTime` 类型（`HH:MM[:SS]`，零值为午夜，`Next(now)` 算下次触发时间），`enabled` 是 `*bool`，用 `IsEnabled()` 读取。
 
 ## 编码约定
 
@@ -90,5 +91,5 @@ docker/                镜像内置配置 config.yaml、入口脚本 entrypoint.
 - 不要给 codex 加 `--ephemeral`：rollout 不落盘时，图片收集只能走 mtime 兜底。
 - 内置 `image_gen` 只支持 `prompt`、`transparent_background`、`referenced_image_paths`、`num_last_images_to_include` 四个参数。OpenAI 的其余参数要么折算进 prompt（`n`、`size`），要么接收后忽略（`mask`、`quality`、`model` 等）；`file_id` 返回 400。
 - 输入图片支持 png/jpeg/webp/gif（按内容嗅探）；输出图片只识别 png/jpeg/webp。
-- 测试用 shell 脚本 `fakeCodex` 模拟 `codex exec`：`internal/server/server_test.go` 中的版本会写 `thread.started` 事件、rollout 和 `generated_images`，用于端到端 HTTP 测试；`cmd/codex-image-api/main_test.go` 中的版本用于优雅关闭测试。改动 codex 输出格式的解析逻辑时，要同步更新这两个脚本。
+- 测试用 shell 脚本 `fakeCodex` 模拟 `codex exec`：`internal/server/server_test.go` 中的版本会写 `thread.started` 事件、rollout 和 `generated_images`，用于端到端 HTTP 测试；`cmd/codex-image-api/main_test.go` 中的版本用于优雅关闭测试。改动 codex 输出格式的解析逻辑时，要同步更新这两个脚本。`internal/codex/token_test.go` 中的 `fakeAppServer` 模拟 `codex app-server` 的 stdio JSON-RPC，改动令牌刷新交互时同步更新。
 - Docker：容器内必须使用 `codex.sandbox: danger-full-access`（bubblewrap 在默认 seccomp/AppArmor 下无法创建命名空间），`workspace.dir` 为 `/data/workspace`。`docker/entrypoint.sh` 会把 `app` 用户重映射为 `APP_UID`/`APP_GID` 后降权运行；它**绝不 chown 挂载的宿主机目录**，只校验属主。修改入口脚本时要保持这一点，并保证脚本幂等。
