@@ -270,12 +270,15 @@ The [Dockerfile](Dockerfile) has two stages. `builder` compiles the server; it r
 
 ### Prebuilt images
 
-[.github/workflows/docker.yml](.github/workflows/docker.yml) runs `go vet` and `go test` on every push and pull request. Branch pushes that change only `*.md` files are skipped. Images are built only when a `vX.Y.Z` git tag (e.g. `v1.2.3`) is pushed: the workflow then builds `linux/amd64` and `linux/arm64` images, pushes them to `ghcr.io/chendefine/codex-image-api`, and copies them unchanged to Docker Hub as `chendefine/codex-image-api`. Branch pushes, pull requests, manual runs and other tags only run the tests. The Docker Hub step needs the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, and is skipped without them.
+[.github/workflows/docker.yml](.github/workflows/docker.yml) runs `go vet` and `go test` on every push and pull request. Branch pushes that change only `*.md` files are skipped. Images are built only when a `vX.Y.Z` git tag (e.g. `v1.2.3`) is pushed: the workflow then calls [release.yml](.github/workflows/release.yml), which builds `linux/amd64` and `linux/arm64` images, pushes them to `ghcr.io/chendefine/codex-image-api`, and copies them unchanged to Docker Hub as `chendefine/codex-image-api`. Branch pushes, pull requests, manual runs and other tags only run the tests. The Docker Hub step needs the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, and is skipped without them.
+
+[.github/workflows/codex-update.yml](.github/workflows/codex-update.yml) runs every day at 00:00 Beijing time (16:00 UTC) and can also be run by hand. When the latest stable Codex release (`rust-vA.B.C`) is newer than `CODEX_VERSION` in the Dockerfile and its Linux packages are uploaded, it updates `CODEX_VERSION` in `Dockerfile`, `.env.example` and `compose.yaml`, commits to `main`, and then rebuilds the newest `vX.Y.Z` tag's source with the new Codex. Unreleased changes on `main` are not included. `release.yml` can also be run by hand to republish a tag with a given Codex version.
 
 | Tag | Source |
 |---|---|
-| `X.Y.Z` | `vX.Y.Z` git tag (without the `v`) |
-| `latest` | most recent `vX.Y.Z` git tag |
+| `X.Y.Z-A.B.C` | `vX.Y.Z` git tag (without the `v`) built with Codex `A.B.C`, e.g. `0.1.1-0.162.0` |
+| `X.Y.Z` | most recent build of `vX.Y.Z`, i.e. with the newest Codex |
+| `latest` | most recent build of the newest `vX.Y.Z` git tag |
 
 ## Development
 

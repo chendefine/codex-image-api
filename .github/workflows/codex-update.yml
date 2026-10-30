@@ -1,0 +1,85 @@
+name: codex-update
+
+# Daily check for a new codex release. When there is one, bump CODEX_VERSION on
+# main and republish the newest vX.Y.Z tag with it as image X.Y.Z-<codex version>.
+#
+# Pushes made with GITHUB_TOKEN trigger no workflows, so the release is called
+# directly from here instead of through docker.yml.
+on:
+  schedule:
+    # 00:00 Asia/Shanghai (UTC+8)
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      codex: ${{ steps.bump.outputs.codex }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          # All tags are needed to find the newest service release.
+          fetch-depth: 0
+      - name: Bump CODEX_VERSION
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current=$(sed -n 's/^ARG CODEX_VERSION=//p' Dockerfile)
+          release=$(gh api repos/openai/codex/releases/latest)
+          tag=$(jq -r .tag_name <<< "$release")
+          if [[ ! $tag =~ ^rust-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::unexpected codex release tag '$tag'"; exit 1
+          fi
+          latest=${BASH_REMATCH[1]}
+          if [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n1)" = "$current" ]; then
+            echo "codex $current is up to date (latest release: $latest)"; exit 0
+          fi
+          # Assets are uploaded after the release is created; retry tomorrow if
+          # the packages the Dockerfile downloads are not there yet.
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            if ! jq -e --arg n "codex-package-$target.tar.gz" 'any(.assets[]; .name == $n)' <<< "$release" > /dev/null; then
+              echo "::warning::codex $latest has no codex-package-$target.tar.gz yet, skipping"; exit 0
+            fi
+          done
+
+          echo "codex $current -> $latest"
+          sed -i "s/^ARG CODEX_VERSION=.*/ARG CODEX_VERSION=$latest/" Dockerfile
+          sed -i "s/^CODEX_VERSION=.*/CODEX_VERSION=$latest/" .env.example
+          sed -i "s/CODEX_VERSION: \${CODEX_VERSION:-[^}]*}/CODEX_VERSION: \${CODEX_VERSION:-$latest}/" compose.yaml
+          git diff --stat
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(docker): 升级 codex 到 $latest"
+          git push origin HEAD:main
+
+          service=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+          if [ -z "$service" ]; then
+            echo "::warning::no vX.Y.Z tag yet, nothing to republish"
+          fi
+          echo "codex=$latest" >> "$GITHUB_OUTPUT"
+          echo "tag=$service" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: check
+    if: needs.check.outputs.tag != ''
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.check.outputs.tag }}
+      codex_version: ${{ needs.check.outputs.codex }}
+    secrets: inherit

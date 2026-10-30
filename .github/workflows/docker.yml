@@ -3,7 +3,7 @@ name: docker
 on:
   push:
     branches: ["**"]
-    # Only strict vX.Y.Z release tags; they are the sole trigger for image builds.
+    # Only strict vX.Y.Z release tags; they are the only pushes that build images.
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
     # Not evaluated for tag pushes.
     paths-ignore: ["**.md"]
@@ -13,9 +13,6 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
   test:
@@ -29,87 +26,15 @@ jobs:
       - run: go test ./... -count=1
 
   # Images are built and pushed only for vX.Y.Z tag pushes; branches, PRs and
-  # manual runs only run the tests.
-  image:
+  # manual runs only run the tests. codex-update.yml republishes the newest tag
+  # when codex releases a new version.
+  release:
     needs: test
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE }}
-          # git tag vX.Y.Z -> image tags X.Y.Z and latest
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest
-      - id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          target: runner
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # 把 GHCR 上刚推送的多架构镜像原样复制到 Docker Hub（不重新构建）。
-  # 需要仓库 secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，未配置时跳过。
-  dockerhub:
-    needs: image
-    runs-on: ubuntu-latest
-    env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-    steps:
-      - name: Check Docker Hub credentials
-        id: creds
-        run: |
-          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-            echo "image=docker.io/${DOCKERHUB_USERNAME,,}/${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::DOCKERHUB_USERNAME / DOCKERHUB_TOKEN not set, skipping Docker Hub push"
-          fi
-      - if: steps.creds.outputs.ok == 'true'
-        uses: docker/setup-buildx-action@v4
-      - if: steps.creds.outputs.ok == 'true'
-        uses: docker/login-action@v4
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
-      - if: steps.creds.outputs.ok == 'true'
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ steps.creds.outputs.image }}
-          # 与 image job 的规则保持一致
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest
-      - name: Copy image from GHCR
-        if: steps.creds.outputs.ok == 'true'
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          SRC: ${{ env.IMAGE }}@${{ needs.image.outputs.digest }}
-        run: |
-          set -euo pipefail
-          args=()
-          while read -r t; do [ -n "$t" ] && args+=(-t "$t"); done <<< "$TAGS"
-          docker buildx imagetools create "${args[@]}" "$SRC"
-          docker buildx imagetools inspect "$(head -n1 <<< "$TAGS")"
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

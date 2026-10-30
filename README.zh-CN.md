@@ -270,12 +270,15 @@ Codex 内置 `image_gen` 工具只有 `prompt`、`transparent_background`、`ref
 
 ### 预构建镜像
 
-[.github/workflows/docker.yml](.github/workflows/docker.yml) 在每次 push 和 PR 时运行 `go vet` 和 `go test`，只改动 `*.md` 的分支 push 会被跳过。只有推送 `vX.Y.Z` 格式的 git tag（如 `v1.2.3`）时才构建镜像：构建 `linux/amd64`、`linux/arm64` 镜像推送到 `ghcr.io/chendefine/codex-image-api`，再原样复制到 Docker Hub 的 `chendefine/codex-image-api`。分支 push、PR、手动触发和其他 tag 只运行测试。推送 Docker Hub 需要在仓库中配置 secrets `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`，未配置时跳过这一步。
+[.github/workflows/docker.yml](.github/workflows/docker.yml) 在每次 push 和 PR 时运行 `go vet` 和 `go test`，只改动 `*.md` 的分支 push 会被跳过。只有推送 `vX.Y.Z` 格式的 git tag（如 `v1.2.3`）时才构建镜像：调用 [release.yml](.github/workflows/release.yml) 构建 `linux/amd64`、`linux/arm64` 镜像推送到 `ghcr.io/chendefine/codex-image-api`，再原样复制到 Docker Hub 的 `chendefine/codex-image-api`。分支 push、PR、手动触发和其他 tag 只运行测试。推送 Docker Hub 需要在仓库中配置 secrets `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`，未配置时跳过这一步。
+
+[.github/workflows/codex-update.yml](.github/workflows/codex-update.yml) 每天北京时间 00:00（UTC 16:00）运行，也可以手动触发。当 Codex 最新稳定版（`rust-vA.B.C`）比 Dockerfile 中的 `CODEX_VERSION` 新、且 Linux 安装包已上传时，它会更新 `Dockerfile`、`.env.example` 和 `compose.yaml` 中的 `CODEX_VERSION` 并提交到 `main`，然后用新版 Codex 重新构建最新 `vX.Y.Z` tag 的源码，`main` 上未发布的改动不会进入镜像。也可以手动运行 `release.yml`，用指定的 Codex 版本重新发布某个 tag。
 
 | 标签 | 来源 |
 |---|---|
-| `X.Y.Z` | `vX.Y.Z` git tag（去掉 `v`） |
-| `latest` | 最近一次推送的 `vX.Y.Z` git tag |
+| `X.Y.Z-A.B.C` | `vX.Y.Z` git tag（去掉 `v`）搭配 Codex `A.B.C` 构建，如 `0.1.1-0.162.0` |
+| `X.Y.Z` | `vX.Y.Z` 最近一次构建，即搭配最新 Codex |
+| `latest` | 最新 `vX.Y.Z` git tag 的最近一次构建 |
 
 ## 开发
 

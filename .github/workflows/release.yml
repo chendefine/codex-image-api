@@ -1,0 +1,151 @@
+name: release
+
+# Builds the multi-arch image of one vX.Y.Z git tag, pushes it to GHCR and copies
+# it to Docker Hub. Called by docker.yml (tag push) and codex-update.yml (new
+# codex release); can also be run by hand to republish a tag.
+#
+# Image tags: X.Y.Z-<codex version>, X.Y.Z, and latest when the tag is the
+# newest vX.Y.Z tag.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Service git tag to build (vX.Y.Z)"
+        required: true
+        type: string
+      codex_version:
+        description: "codex version to install; empty = CODEX_VERSION in the tag's Dockerfile"
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Service git tag to build (vX.Y.Z)"
+        required: true
+        type: string
+      codex_version:
+        description: "codex version to install; empty = CODEX_VERSION in the tag's Dockerfile"
+        required: false
+        type: string
+        default: ""
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      service: ${{ steps.v.outputs.service }}
+      codex: ${{ steps.v.outputs.codex }}
+      latest: ${{ steps.v.outputs.latest }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          # All tags are needed to tell whether this one is the newest.
+          fetch-depth: 0
+      - name: Resolve versions
+        id: v
+        env:
+          TAG: ${{ inputs.tag }}
+          CODEX_VERSION: ${{ inputs.codex_version }}
+        run: |
+          set -euo pipefail
+          semver='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          if [[ ! $TAG =~ $semver ]]; then
+            echo "::error::tag must be vX.Y.Z, got '$TAG'"; exit 1
+          fi
+          codex=${CODEX_VERSION:-$(sed -n 's/^ARG CODEX_VERSION=//p' Dockerfile)}
+          if [[ ! $codex =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::invalid codex version '$codex'"; exit 1
+          fi
+          newest=$(git tag --list 'v*' | grep -E "$semver" | sort -V | tail -n1)
+          {
+            echo "service=${TAG#v}"
+            echo "codex=$codex"
+            echo "latest=$([ "$TAG" = "$newest" ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.v.outputs.service }}-${{ steps.v.outputs.codex }}
+            type=raw,value=${{ steps.v.outputs.service }}
+            type=raw,value=latest,enable=${{ steps.v.outputs.latest }}
+          labels: |
+            io.github.openai.codex.version=${{ steps.v.outputs.codex }}
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runner
+          platforms: linux/amd64,linux/arm64
+          build-args: CODEX_VERSION=${{ steps.v.outputs.codex }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 把 GHCR 上刚推送的多架构镜像原样复制到 Docker Hub（不重新构建）。
+  # 需要仓库 secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，未配置时跳过。
+  dockerhub:
+    needs: image
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Check Docker Hub credentials
+        id: creds
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "image=docker.io/${DOCKERHUB_USERNAME,,}/${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::DOCKERHUB_USERNAME / DOCKERHUB_TOKEN not set, skipping Docker Hub push"
+          fi
+      - if: steps.creds.outputs.ok == 'true'
+        uses: docker/setup-buildx-action@v4
+      - if: steps.creds.outputs.ok == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - if: steps.creds.outputs.ok == 'true'
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.creds.outputs.image }}
+          # 与 image job 的规则保持一致
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.image.outputs.service }}-${{ needs.image.outputs.codex }}
+            type=raw,value=${{ needs.image.outputs.service }}
+            type=raw,value=latest,enable=${{ needs.image.outputs.latest }}
+      - name: Copy image from GHCR
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          SRC: ${{ env.IMAGE }}@${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          args=()
+          while read -r t; do [ -n "$t" ] && args+=(-t "$t"); done <<< "$TAGS"
+          docker buildx imagetools create "${args[@]}" "$SRC"
+          docker buildx imagetools inspect "$(head -n1 <<< "$TAGS")"
